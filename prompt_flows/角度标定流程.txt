@@ -1,0 +1,7 @@
+        ###角度标定流程：(触发关键词：角度标定)
+        A[开始] --> B[调用Alg_get_home_position获取初始位置，记录为home_position]
+        B --> C[调用Rob_movej_2移动到home_position点位]
+        C --> D[调用Cam_get_normal_vector获取法向量，记录为normal_vector]
+        D --> E[调用Alg_angle_calibration方法，传入normal_vector进行角度标定]
+        E -->|标定成功| F[角度标定完成]
+        E -->|标定失败| G[返回错误信息]

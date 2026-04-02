@@ -1,0 +1,4 @@
+        ###回到初始点流程：(触发关键词：返回起点，回到初始点，返回home点)
+        A[开始] --> B[调用Alg_get_home_position获取初始位置，记录为home_position]
+        B --> C[调用Rob_movej_2移动到home_position点位]
+        C --> D[流程结束]

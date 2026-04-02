@@ -1,0 +1,10 @@
+        ###螺钉标定流程：(触发关键词：螺钉标定，标定螺钉，拧螺套标定，螺杆标定等)
+        A[开始] --> B[调用Alg_get_offset_info获取偏移量offset1, offset2, offset3]
+        B --> C[基于offset1执行Rob_movetcp指令，移动到标定位置1]
+        C --> D[调用Cam_get_screw_points获取螺钉像素坐标，记录为first_image_point,同时记录执行前tcp坐标为first_robot_point]
+        D --> E[基于offset2执行Rob_movetcp指令，移动到标定位置2]
+        E --> F[调用Cam_get_screw_points获取螺钉像素坐标，记录为second_image_point,同时记录执行前tcp坐标为second_robot_point]
+        F --> G[基于offset3执行Rob_movetcp指令，移动到标定位置3，记录执行后tcp坐标为third_robot_point]
+        G --> H[调用Alg_screw_calibration方法，传入first_image_point、second_image_point、first_robot_point、second_robot_point、third_robot_point]
+        H -->|标定成功| I[螺钉标定完成]
+        H -->|标定失败| J[返回错误信息]

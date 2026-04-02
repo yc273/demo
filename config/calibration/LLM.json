@@ -1,0 +1,19 @@
+{
+    "models": {
+        "qwen": {
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "sk-726d3c6af38e49b7b4cb7fe51f7ef178",
+            "model": "qwen-plus"
+        },
+        "glm": {
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "83c6c9c238b7472393433c6d8cb92bab.p4cJURUFadoQIhWF",
+            "model": "glm-4.6"
+        },
+        "vllm": {
+            "base_url": "http://localhost:6006/v1",
+            "api_key": "empty",
+            "model": "vllm"
+        }
+    }
+}

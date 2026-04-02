@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: 强制激活 Conda 运行",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {},
+            "justMyCode": true,
+            // 👇 下面这行是关键：强制先激活环境再运行
+            "python": "conda activate mcp12 && python",
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+        ###角度调整流程：(触发关键词：角度调整，角度校正，角度校准，平行度调整，平行度校正等)
+        A[开始] --> B[step=1: 调用Cam_get_normal_vector获取法向量，记录为current_normal_vector_1]
+        B --> C[调用Alg_angle_adjust_estimate(current_normal_vector_1)判断是否完成角度调整]
+        C -->|返回"是"| D[角度调整流程结束，不在执行指令（为该流程出口）]
+        C -->|返回"否"| E[调用Alg_angle_adjust(current_normal_vector_1)获取调整量offset_1]
+        E --> F[基于offset_1执行Rob_movetcp指令移动机器人]
+        F --> G[step=2: 调用Cam_get_normal_vector获取法向量，记录为current_normal_vector_2]
+        G --> H[调用Alg_angle_adjust_estimate(current_normal_vector_2)判断是否完成角度调整]
+        H -->|返回"是"| D[结束流程]
+        H -->|返回"否"| I[调用Alg_angle_adjust(current_normal_vector_2)获取调整量offset_2]
+        I --> J[基于offset_2执行Rob_movetcp指令移动机器人]
+        J --> K[依次类推（重复获取法向量→判断→计算调整量→移动的循环）]
+        K --> D

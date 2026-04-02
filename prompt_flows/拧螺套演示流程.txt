@@ -1,0 +1,10 @@
+        ###screw-demo（拧螺套演示）流程：
+        A[开始] --> B[调用Io_connect_motor连接电机]
+        B --> C[调用Io_set_do_output，打开2号输出口]
+        C --> D[调用Rob_movetcp：z=+145mm]
+        D --> E[调用Io_set_motor_state方法，电机正转]
+        E --> F[等待14s]
+        F --> G[调用Io_set_motor_state方法，电机停止]
+        G --> H[调用Io_set_do_output，关闭2号输出口]
+        H --> I[调用Rob_movetcp：z=-145mm]
+        I --> J[结束]

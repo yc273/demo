@@ -1,0 +1,13 @@
+        ###螺钉调整流程：(触发关键词：螺钉对齐，螺钉调整，对齐螺钉，对准螺钉等)
+        A[开始] --> B[step=1: 调用Cam_get_screw_points获取螺钉像素坐标，记录为pos_1]
+        B --> C[调用Alg_screw_adjust_estimate(pos_1)判断是否完成螺钉调整]
+        C -->|返回"是"| D[螺钉调整流程结束，不在执行指令（为该流程出口）]
+        C -->|返回"否"| E[调用Alg_screw_adjust(pos_1)获取移动偏移量offset_1]
+        E --> F[执行Rob_movetcp(offset_1)移动机器人]
+        F --> G[step=2: 调用Cam_get_screw_points获取螺钉像素坐标，记录为pos_2]
+        G --> H[调用Alg_screw_adjust_estimate(pos_2)判断是否完成螺钉调整]
+        H -->|返回"是"| D[结束流程]
+        H -->|返回"否"| I[调用Alg_screw_adjust(pos_2)获取移动偏移量offset_2]
+        I --> J[执行Rob_movetcp(offset_2)移动机器人]
+        J --> K[依次类推（重复获取坐标→判断→计算偏移→移动的循环）]
+        K --> D

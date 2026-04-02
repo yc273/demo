@@ -1,0 +1,4 @@
+        ###移动到记录点'name'流程：(触发关键词：移到点"xxx",移动到记录点"xxx"等)
+        A[开始] --> B[调用Alg_get_recorded_point方法获取点-name的位置，传入name]
+        B --> C[调用Rob_movej_2方法移动到点-name，传入点-name的位置]
+        C --> D[流程结束]

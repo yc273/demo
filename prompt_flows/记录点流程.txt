@@ -1,0 +1,7 @@
+        ###记录点'name'流程：(触发关键词：记录点"xxx",记录点位"xxx"等)
+        A[开始] --> B[用户输入记录点名称name]
+        B --> C[调用Alg_get_recorded_point方法查询点-name是否已存在]
+        C -->|存在| D[返回"该点位已存在"]
+        C -->|不存在| E[调用Alg_record_point方法记录点-name，传入执行前tcp_pos和name]
+        E --> F[流程结束]
+        D --> F

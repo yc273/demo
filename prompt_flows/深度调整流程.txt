@@ -1,0 +1,15 @@
+        ###深度调整流程：(触发关键词：深度调整，深度校准，深度校正)
+        A[开始] --> B[step=1: 调用Cam_get_depth()获取当前深度，记录为current_depth_1]
+        B --> C[调用Alg_depth_adjust_estimate(current_depth_1)判断是否完成调整]
+        C -->|返回"是"| D[调用Alg_get_offset_info()获取offset4]
+        D --> E[基于offset4执行Rob_movetcp指令]
+        E --> F[深度调整流程结束，不在执行指令（为该流程出口）]
+        C -->|返回"否"| G[调用Alg_depth_adjust(current_depth_1)获取pos_1]
+        G --> H[基于pos_1执行Rob_movetcp指令]
+        H --> I[step=2: 调用Cam_get_depth()获取current_depth_2]
+        I --> J[调用Alg_depth_adjust_estimate(current_depth_2)判断]
+        J -->|返回"是"| D
+        J -->|返回"否"| K[调用Alg_depth_adjust(current_depth_2)获取pos_2]
+        K --> L[基于pos_2执行Rob_movetcp指令]
+        L --> M[依次类推（循环调整）]
+        M --> D
