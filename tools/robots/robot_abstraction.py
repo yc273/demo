@@ -851,13 +851,13 @@ class DucocobotRobot(RobotAbstraction):
         """等待duco机器人运动完成"""
         if not self.robot:
             return False
-        
-        try:
-            time.sleep(0.5)
-            while self.robot.robotmoving():
-                time.sleep(1)
 
-            
+        try:
+            await asyncio.sleep(0.5)
+            while self.robot.robotmoving():
+                await asyncio.sleep(1)
+
+
             self.state = RobotState.CONNECTED
             return True
         except Exception as e:

@@ -15,8 +15,8 @@ from .io_controller import IoController
 from .device_controllers import Liyou
 
 # Configuration
-IO_CONTROLLER_IP = "10.10.100.254"
-IO_CONTROLLER_PORT = 2317
+IO_CONTROLLER_IP = "192.168.0.21"
+IO_CONTROLLER_PORT = 8899
 CONNECT_TIMEOUT = 10
 
 # Global state
@@ -34,42 +34,35 @@ def register_io_tools(mcp: FastMCP):
 
     #region 电机控制器连接工具
     @mcp.tool()
-    async def Io_connect_motor() -> str:
+    async def Io_connect_motor() -> bool:
         """连接到电机控制器
-        功能：连接电机控制器（默认IP：10.10.100.254:2317）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
+        功能：连接电机控制器（默认IP：192.168.0.21:8899）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
+
+        # 获取现有IO控制器实例
         global io_controller
+
+        # 若已连接，先关闭旧连接
+        if io_controller is not None and getattr(io_controller, 'is_connected', False):
+            await io_controller.close()
+
+        # 初始化控制器并连接（不使用async with，避免自动关闭）
+        io_controller = IoController()
+
+        # 带超时的连接
         try:
-            # 若已连接，先关闭旧连接
-            if io_controller is not None and io_controller.is_connected:
-                await io_controller.close()
-                logger.info("已关闭现有电机控制器连接，准备重新连接")
+            await asyncio.wait_for(
+                io_controller.connect_async(IO_CONTROLLER_IP, IO_CONTROLLER_PORT),
+                timeout=CONNECT_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            raise Exception(f"连接超时（{CONNECT_TIMEOUT}秒），请检查电机控制器是否在线")
 
-            # 初始化控制器并连接（不使用async with，避免自动关闭）
-            io_controller = IoController()
-            
-            # 带超时的连接
-            try:
-                await asyncio.wait_for(
-                    io_controller.connect_async(IO_CONTROLLER_IP, IO_CONTROLLER_PORT),
-                    timeout=CONNECT_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                return f"连接超时（{CONNECT_TIMEOUT}秒），请检查电机控制器是否在线"
-
-            # 验证连接状态
-            if io_controller.is_connected:
-                success_msg = f"成功连接到电机控制器 {IO_CONTROLLER_IP}:{IO_CONTROLLER_PORT}"
-                logger.info(success_msg)
-                return success_msg
-            else:
-                error_msg = f"连接失败：电机控制器未确认连接，IP={IO_CONTROLLER_IP}:{IO_CONTROLLER_PORT}"
-                logger.error(error_msg)
-                return error_msg
-
-        except Exception as e:
-            error_msg = f"连接电机控制器失败：{str(e)}（IP={IO_CONTROLLER_IP}:{IO_CONTROLLER_PORT}）"
-            logger.error(error_msg, exc_info=True)
-            return error_msg
+        # 验证连接状态
+        if getattr(io_controller, 'is_connected', False):
+            # 设置到管理器
+            return True
+        else:
+            raise Exception(f"连接失败：电机控制器未确认连接，IP={IO_CONTROLLER_IP}:{IO_CONTROLLER_PORT}")
 
     @mcp.tool()
     async def Io_disconnect_motor() -> str:
@@ -205,7 +198,21 @@ def register_io_tools(mcp: FastMCP):
             logger.error(error_msg)
             return error_msg
     #endregion
+    #region 激光传感器深度测量工具
+    @mcp.tool()
+    async def Io_get_laser_depth() -> float:
+        """
+        功能：获取激光传感器测量的深度值；触发词：激光深度、传感器深度、测量深度；参数：无，返回深度值（单位：毫米）
+        获取激光传感器测量的距离值并转换为深度值
+        """
 
+        global io_controller
+        if io_controller is None or not getattr(io_controller, 'is_connected', False):
+            raise Exception("未连接到电机控制器，请先连接")
+
+        distance = io_controller.get_laser_distance()
+        return distance
+    #endregion
     #region Liyou控制器工具
     @mcp.tool()
     async def Io_liyou_connect() -> str:

@@ -110,15 +110,13 @@ class ScrewPointsResponse:
         )
     
 class HexNutPointsResponse:
-    def __init__(self, hex_nut_points_pixels: List[List[float]], hex_nut_points_camera: List[List[float]]):
+    def __init__(self, hex_nut_points_pixels: List[List[float]]):
         self.hex_nut_points_pixels = hex_nut_points_pixels
-        self.hex_nut_points_camera = hex_nut_points_camera
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> 'HexNutPointsResponse':
         return HexNutPointsResponse(
-            data.get('hex_nut_points_pixels', []),
-            data.get('hex_nut_points_camera', [])
+            data.get('u_points', [])
         )
 #endregion
 
@@ -409,7 +407,7 @@ class VisionApi:
             raise RuntimeError("未连接到服务器")
         try:
             # 发送指令
-            command = "u\n"
+            command = "u_points\n"
             command_bytes = command.encode('utf-8')
             self.logger.info(f"发送指令：'{command.strip()}' (字节数：{len(command_bytes)})")
 

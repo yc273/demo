@@ -784,7 +784,7 @@ class MCPClient:
             return False
 
     #region 深度调整
-    async def test_depth_adjustment(self):
+    async def test_depth_adjustment(self,need_deep):
         """
         测试深度调整流程
         """
@@ -797,24 +797,32 @@ class MCPClient:
             if not robot_connected:
                 print("机器人未连接，跳过测试")
                 return False
-                    
-            if not vision_connected:
-                print("视觉未连接，跳过测试")
-                return False
+            if not io_connected:
+                print("IO控制器未连接，跳过测试")
+                return False         
+            # if not vision_connected:
+            #     print("视觉未连接，跳过测试")
+            #     return False
             
-            if not is_tool_set:
-                print("未选择工具，跳过测试")
-                return False
+            # if not is_tool_set:
+            #     print("未选择工具，跳过测试")
+            #     return False
+
 
             max_steps = 6  # 最大调整步数
             adjustment_completed = False
-            
+            try:
+                target_depth = float(need_deep)
+                print(f"目标深度：{target_depth} mm")
+            except (ValueError, TypeError) as e:
+                print(f"目标深度参数错误：{need_deep}，无法转换为数字")
+                return False
             for step in range(1, max_steps + 1):
                 print(f"\n--- 深度调整步骤 {step} ---")
                 # 获取深度
                 print("获取深度...")
                 start1_time = time.time()
-                depth_result = await self.session.call_tool("Cam_get_depth", {})
+                depth_result = await self.session.call_tool("Io_get_laser_depth", {})
                 depth_text = depth_result.content[0].text if depth_result.content else "获取失败"
                 print(f"获取深度结果: {depth_text}")
                 end1_time = time.time()
@@ -831,59 +839,27 @@ class MCPClient:
                 if not depth_value:
                     print("未能获取深度值，跳过本次调整")
                     continue
-                
-                # 判断是否完成调整
-                print("判断是否完成深度调整...")
-                estimate_result = await self.session.call_tool("Alg_depth_adjust_estimate", {"current_depth": depth_value})
-                estimate_result_text = estimate_result.content[0].text if estimate_result.content else "判断失败"
-                print(f"判断调整状态结果: {estimate_result_text}")
-                
-                # 如果完成调整则退出循环
-                if "是" in str(estimate_result_text):
-                    print("深度调整完成")
-                    adjustment_completed = True
+                adjust_depth=depth_value-target_depth
+                if abs(adjust_depth)<=0.001:
+                    adjustment_completed=True
                     break
                 
-                # 计算调整量
-                print("计算深度调整量...")
-                pos_result = await self.session.call_tool("Alg_depth_adjust", {"current_depth": depth_value})
-                pos_result_text = pos_result.content[0].text if pos_result.content else "计算失败"
-                print(f"计算深度调整量结果: {pos_result_text}")
-                
-                # 解析调整量
-                try:
-                    pos_value = json.loads(pos_result_text)
-                    print(f"解析后的调整量: {pos_value}")
-                except json.JSONDecodeError:
-                    # 如果不是JSON格式，直接使用文本
-                    pos_value = pos_result_text
-                    print(f"调整量: {pos_value}")
-                
-                # 检查是否获取到调整量
-                if not pos_value:
-                    print("未能计算出深度调整量，跳过本次调整")
-                    continue
-                    
-                # 移动机器人
-                print(f"移动机器人，调整量: {pos_value}")
-                move_result = await self.session.call_tool("Rob_movetcp", {"offset": pos_value})
-                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
-                print(f"移动机器人结果: {move_result_text}")
-            end_time = time.time()
-            print(f"单次深度调整总耗时: {end_time - start_time:.2f} 秒")
-            return True
-            # if adjustment_completed:
-            #     offset_text = await self.session.call_tool("Alg_get_offset_info",{})
-            #     offset_text = json.loads(offset_text.content[0].text) if offset_text.content else "获取失败"
-            #     offset4 = offset_text["offset4"]
-            #     print(f"偏移量4: {offset4}")
-            #     move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset4})
-            #     print(f"移动机器人结果: {move_result_text}")
-            #     print("深度调整流程测试完成")
-            #     return True
-            # else:
-            #     print(f"深度调整流程测试未完成，达到最大调整步数 {max_steps}")
-            #     return False
+                if not adjustment_completed:
+                    # 移动机器人
+                    pos_value=[0,0,adjust_depth,0,0,0]
+                    print(f"移动机器人，调整量: {pos_value}")
+                    move_result = await self.session.call_tool("Rob_movetcp", {"offset": pos_value})
+                    move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+                    print(f"移动机器人结果: {move_result_text}")
+                    await asyncio.sleep(2)
+                end_time = time.time()
+                print(f"单次深度调整总耗时: {end_time - start_time:.2f} 秒")
+            if adjustment_completed:
+                print("深度调整流程测试完成")
+                return True
+            else:
+                print(f"深度调整流程测试未完成，达到最大调整步数 {max_steps}")
+                return False
             
         except Exception as e:
             print(f"测试深度调整流程时出错: {e}")
@@ -3213,7 +3189,325 @@ class MCPClient:
         print(f"获取六角螺套点结果: {normal_vector_text}")
         return 
 
+#endgion
+#region 六角螺套标定
+    async def test_u_calibration(self):
+        """
+        测试六角螺套标定流程
+        """
+        global robot_connected, vision_connected, is_tool_set
+        
+        print("=== 测试六角螺套标定流程 ===")
+        
+        try:
+            # 确保机器人和视觉已连接
+            if not robot_connected:
+                print("机器人未连接，跳过测试")
+                return False
+                    
+            if not vision_connected:
+                print("视觉未连接，跳过测试")
+                return False
+            
+            if not is_tool_set:
+                print("未选择工具，跳过测试")
+                return False
 
+            # 获取偏移量信息
+            print("获取偏移量信息...")
+            offset_result = await self.session.call_tool("Alg_get_offset_info", {})
+            offset_result_text = offset_result.content[0].text if offset_result.content else "{}"
+            print(f"获取偏移量结果：{offset_result_text}")
+            
+            # 解析偏移量结果
+            import json
+            try:
+                offset_result_dict = json.loads(offset_result_text) if offset_result_text else {}
+            except json.JSONDecodeError:
+                print("解析偏移量失败，无法继续标定流程")
+                return False
+                
+            # 提取偏移量
+            offset1 = offset_result_dict.get("offset1", [0, 0, 0, 0, 0, 0])
+            offset2 = offset_result_dict.get("offset2", [0, 0, 0, 0, 0, 0])
+            offset3 = offset_result_dict.get("offset3", [0, 0, 0, 0, 0, 0])
+            
+            # 移动到标定位置 1
+            print(f"移动到标定位置 1，偏移量：{offset1}")
+            result = await self.session.call_tool("Rob_movetcp", {"offset": offset1})
+            result_text = result.content[0].text if result.content else "移动失败"
+            print(f"移动到标定位置 1 结果：{result_text}")
+            
+            await asyncio.sleep(5)
+            
+            # 获取六角螺套像素坐标
+            print("获取六角螺套像素坐标...")
+            hex_nut_points_result1 = await self.session.call_tool("Cam_get_u_points", {})
+            hex_nut_points_result1_text = hex_nut_points_result1.content[0].text if hex_nut_points_result1.content else "获取失败"
+            print(f"获取六角螺套像素坐标结果：{hex_nut_points_result1_text}")
+            
+            # 解析六角螺套坐标
+            try:
+                first_image_point = json.loads(hex_nut_points_result1_text)
+                # 如果是列表且有元素，取第一个点
+                if isinstance(first_image_point, list) and len(first_image_point) > 0:
+                    if isinstance(first_image_point[0], list):
+                        first_image_point = first_image_point[0]
+                    print(f"第一标定点图像坐标：{first_image_point}")
+            except json.JSONDecodeError:
+                first_image_point = hex_nut_points_result1_text
+                print(f"第一标定点图像坐标：{first_image_point}")
+            
+            # 获取当前机器人 TCP 位置
+            print("获取当前机器人 TCP 位置...")
+            first_robot_point_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            first_robot_point_text = first_robot_point_result.content[0].text if first_robot_point_result.content else "获取失败"
+            print(f"当前机器人 TCP 位置结果：{first_robot_point_text}")
+            
+            # 解析机器人位置
+            try:
+                first_robot_point = json.loads(first_robot_point_text)
+                print(f"第一标定点机器人位置：{first_robot_point}")
+            except json.JSONDecodeError:
+                first_robot_point = first_robot_point_text
+                print(f"第一标定点机器人位置：{first_robot_point}")
+            
+            # 移动到标定位置 2
+            print(f"移动到标定位置 2，偏移量：{offset2}")
+            result = await self.session.call_tool("Rob_movetcp", {"offset": offset2})
+            result_text = result.content[0].text if result.content else "移动失败"
+            print(f"移动到标定位置 2 结果：{result_text}")
+            
+            await asyncio.sleep(5)
+            
+            # 获取六角螺套像素坐标
+            print("获取六角螺套像素坐标...")
+            hex_nut_points_result2 = await self.session.call_tool("Cam_get_u_points", {})
+            hex_nut_points_result2_text = hex_nut_points_result2.content[0].text if hex_nut_points_result2.content else "获取失败"
+            print(f"获取六角螺套像素坐标结果：{hex_nut_points_result2_text}")
+            
+            # 解析六角螺套坐标
+            try:
+                second_image_point = json.loads(hex_nut_points_result2_text)
+                # 如果是列表且有元素，取第一个点
+                if isinstance(second_image_point, list) and len(second_image_point) > 0:
+                    if isinstance(second_image_point[0], list):
+                        second_image_point = second_image_point[0]
+                    print(f"第二标定点图像坐标：{second_image_point}")
+            except json.JSONDecodeError:
+                second_image_point = hex_nut_points_result2_text
+                print(f"第二标定点图像坐标：{second_image_point}")
+            
+            # 获取当前机器人 TCP 位置
+            print("获取当前机器人 TCP 位置...")
+            second_robot_point_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            second_robot_point_text = second_robot_point_result.content[0].text if second_robot_point_result.content else "获取失败"
+            print(f"当前机器人 TCP 位置结果：{second_robot_point_text}")
+            
+            # 解析机器人位置
+            try:
+                second_robot_point = json.loads(second_robot_point_text)
+                print(f"第二标定点机器人位置：{second_robot_point}")
+            except json.JSONDecodeError:
+                second_robot_point = second_robot_point_text
+                print(f"第二标定点机器人位置：{second_robot_point}")
+            
+            # 移动到标定位置 3
+            print(f"移动到标定位置 3，偏移量：{offset3}")
+            result = await self.session.call_tool("Rob_movetcp", {"offset": offset3})
+            result_text = result.content[0].text if result.content else "移动失败"
+            print(f"移动到标定位置 3 结果：{result_text}")
+            
+            await asyncio.sleep(5)
+            
+            # 获取当前机器人 TCP 位置
+            print("获取当前机器人 TCP 位置...")
+            third_robot_point_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            third_robot_point_text = third_robot_point_result.content[0].text if third_robot_point_result.content else "获取失败"
+            print(f"当前机器人 TCP 位置结果：{third_robot_point_text}")
+            
+            # 解析机器人位置
+            try:
+                third_robot_point = json.loads(third_robot_point_text)
+                print(f"第三标定点机器人位置：{third_robot_point}")
+            except json.JSONDecodeError:
+                third_robot_point = third_robot_point_text
+                print(f"第三标定点机器人位置：{third_robot_point}")
+            
+            # 检查所有必需的数据是否都已获取
+            if not all([first_image_point, first_robot_point, second_image_point, 
+                        second_robot_point, third_robot_point]):
+                print("未能获取所有必需的标定数据，无法执行标定")
+                return False
+            
+            # 执行六角螺套标定
+            print("执行六角螺套标定...")
+            print(f"标定点数据:")
+            print(f"  first_image_point: {first_image_point}")
+            print(f"  second_image_point: {second_image_point}")
+            print(f"  first_robot_point: {first_robot_point}")
+            print(f"  second_robot_point: {second_robot_point}")
+            print(f"  third_robot_point: {third_robot_point}")
+            
+            # 调用标定算法
+            calibration_result = await self.session.call_tool("Alg_screw_calibration", {
+                "first_image_point": first_image_point,
+                "second_image_point": second_image_point,
+                "first_robot_point": first_robot_point,
+                "second_robot_point": second_robot_point,
+                "third_robot_point": third_robot_point
+            })
+            calibration_result_text = calibration_result.content[0].text if calibration_result.content else "标定失败"
+            print(f"六角螺套标定结果：{calibration_result_text}")
+            
+            print("六角螺套标定流程测试完成")
+            return True
+            
+        except Exception as e:
+            print(f"测试六角螺套标定流程时出错：{e}")
+            import traceback
+            traceback.print_exc()
+            return False
+#endregion
+#region 六角螺套调整
+    async def test_u_adjustment(self):
+        """
+        测试六角螺套调整流程
+        """
+        global robot_connected, vision_connected, is_tool_set
+        
+        print("=== 测试六角螺套调整流程 ===")
+        
+        try:
+            # 确保机器人和视觉已连接
+            if not robot_connected:
+                print("机器人未连接，跳过测试")
+                return False
+                    
+            if not vision_connected:
+                print("视觉未连接，跳过测试")
+                return False
+            
+            if not is_tool_set:
+                print("未选择工具，跳过测试")
+                return False
+
+            max_steps = 7  # 最大调整步数
+            adjustment_completed = False
+            current_pos_result = await self.session.call_tool("Rob_get_current_joint_pos", {})
+            current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
+            if "失败" in current_pos_text or not current_pos_text:
+                print("获取当前关节位置失败，无法进行调整")
+                return False
+           # 解析当前位置
+            import json
+            try:
+                current_pos = json.loads(current_pos_text)
+                # 修改第 6 个元素（索引 5）
+                current_pos[5] = 0
+            except json.JSONDecodeError:
+                print("解析关节位置数据失败")
+                return False
+            except IndexError:
+                print("关节位置数据长度不足，无法修改第 6 个元素")
+                return False
+            
+            move_result = await self.session.call_tool("Rob_movej", {
+                    "joint_angles": current_pos
+                })
+            
+            for step in range(1, max_steps + 1):
+                joint_pos = await self.session.call_tool("Rob_get_current_joint_pos")
+                
+                print(f"\n--- 六角螺套调整步骤 {step} ---")
+                await asyncio.sleep(5)
+                # 获取六角螺套像素坐标
+                print("获取六角螺套像素坐标...")
+                hex_nut_points_result = await self.session.call_tool("Cam_get_u_points", {})
+                hex_nut_points_text = hex_nut_points_result.content[0].text if hex_nut_points_result.content else "获取失败"
+                print(f"获取六角螺套像素坐标结果：{hex_nut_points_text}")
+                
+                # 解析六角螺套坐标
+                try:
+                    hex_nut_point = json.loads(hex_nut_points_text)
+                    # 如果是列表且有元素，取第一个点
+                    if isinstance(hex_nut_point, list) and len(hex_nut_point) > 0:
+                        if isinstance(hex_nut_point[0], list):
+                            hex_nut_point = hex_nut_point[0]
+                        else:
+                            hex_nut_point = hex_nut_point
+                    print(f"六角螺套坐标：{hex_nut_point}")
+                except json.JSONDecodeError:
+                    # 如果不是 JSON 格式，直接使用文本
+                    hex_nut_point = hex_nut_points_text
+                    print(f"六角螺套坐标：{hex_nut_point}")
+                
+                # 检查是否获取到六角螺套坐标
+                if not hex_nut_point:
+                    print("未能获取六角螺套坐标，跳过本次调整")
+                    continue
+                
+                # 判断是否完成调整
+                print("判断是否完成六角螺套调整...")
+                estimate_result = await self.session.call_tool("Alg_screw_adjust_estimate", {"pos": hex_nut_point})
+                estimate_result_text = estimate_result.content[0].text if estimate_result.content else "判断失败"
+                print(f"判断调整状态结果：{estimate_result_text}")
+                
+                # 如果完成调整则退出循环
+                if "是" in str(estimate_result_text):
+                    print("六角螺套调整完成")
+                    adjustment_completed = True
+                    break
+                
+                # 计算移动偏移量
+                print("计算移动偏移量...")
+                offset_result = await self.session.call_tool("Alg_screw_adjust", {"pos": hex_nut_point})
+                offset_result_text = offset_result.content[0].text if offset_result.content else "计算失败"
+                print(f"计算移动偏移量结果：{offset_result_text}")
+                
+                # 解析偏移量
+                try:
+                    offset_value = json.loads(offset_result_text)
+                    print(f"解析后的偏移量：{offset_value}")
+                except json.JSONDecodeError:
+                    # 如果不是 JSON 格式，直接使用文本
+                    offset_value = offset_result_text
+                    print(f"偏移量：{offset_value}")
+                
+                # 检查是否获取到偏移量
+                if not offset_value:
+                    print("未能计算出移动偏移量，跳过本次调整")
+                    continue
+                    
+                # 移动机器人
+                print(f"移动机器人，偏移量：{offset_value}")
+                move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset_value})
+                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+                print(f"移动机器人结果：{move_result_text}")
+            
+            if adjustment_completed:
+                print("六角螺套调整流程测试完成")
+                return True
+            else:
+                print(f"六角螺套调整流程测试未完成，达到最大调整步数 {max_steps}")
+                return False
+            
+        except Exception as e:
+            print(f"测试六角螺套调整流程时出错：{e}")
+            import traceback
+            traceback.print_exc()
+            return False
+#endregion
+#region 连接电机
+
+    async def io_connect(self):
+        global io_connected
+
+        connect_result = await self.session.call_tool("Io_connect_motor", {})
+        connect_result_text = connect_result.content[0].text if connect_result.content else "连接检查失败"
+        print(f"连接状态：{connect_result_text}")
+        io_connected = True
+        return True
     #region 交互菜单
     async def interactive_menu(self):
         """
@@ -3243,7 +3537,9 @@ class MCPClient:
             print("\n")
             print("32.板角度调整            33.板中心调整        34.板中心标定  ")
             print("\n")
-            print("35.获取六角螺套点            0.退出")
+            print("35.获取六角螺套点        36.U型件标定         37.U型件调整 ")
+            print("\n")
+            print("38.连接电机              0.退出")
             print("\n")
 
 
@@ -3257,7 +3553,7 @@ class MCPClient:
             elif choice == "2":
                 await self.test_vision_connection()
             elif choice == "3":
-                tool_name = input("请输入工具名称 (1为焊枪(nail_bumping 2为拧螺套(screw_sleeve, 默认焊枪工具): ").strip()
+                tool_name = input("请输入工具名称 (1为焊枪(nail_bumping 2为拧螺套(screw_sleeve, 默认焊枪工具),输入别的创建新工具: ").strip()
                 if not tool_name:
                     tool_name = "nail_bumping"
                 if tool_name=="1":
@@ -3277,7 +3573,8 @@ class MCPClient:
             elif choice == "8":
                 await self.test_angle_adjustment()
             elif choice == "9":
-                await self.test_depth_adjustment()
+                move_command = input("请输入需要调整到哪个深度: ").strip()
+                await self.test_depth_adjustment(move_command)
             elif choice == "10":
                 await self.test_screw_demo()
             elif choice == "13":
@@ -3340,6 +3637,12 @@ class MCPClient:
                 await self.board_center_calibration()
             elif choice == "35":
                 await self.get_u_cross()
+            elif choice == "36":
+                await self.test_u_calibration()
+            elif choice == "37":
+                await self.test_u_adjustment()
+            elif choice == "38":
+                await self.io_connect()
             elif choice == "0":
                 print("退出程序")
                 break
