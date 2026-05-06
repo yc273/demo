@@ -88,11 +88,13 @@ class AlgorithmsApi:
         # self.offset1 = [-0.02, -0.09, -0.13, 0, 0, 0]#115-215
         # self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
 
-        self.offset = [0.01, -0.008]
+        self.offset = [0.02, -0.015]
         # self.offset1 = [-0.02, 0.035, -0.1, 0, 0, 0]#焊钉专用
         # self.offset1 = [0.09, 0.02, -0.1, 0, 0, 0]#拧螺套专用
         # self.offset1 = [-0.09, -0.02, -0.1, 0, 0, 0]#焊钉专用
-        self.offset1 = [0.08, 0, -0.06, 0, 0, 0]
+        # self.offset1 = [0.08,0, -0.06, 0, 0, 0]
+        self.offset1 = [0,0, 0, 0, 0, 0]#0.327 0.341-fangban 0.21 0.15
+
         self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
         #深度由200mm调整至270mm 49.7
         self.offset3 = [0,0,0,0,0,0]
@@ -310,7 +312,7 @@ class AlgorithmsApi:
                 0, 0, 0, 0
             ]
             print('is_position_adjusted_perfectly: offset_X:{}, offset_Y:{}'.format(abs(align_offset[0]), abs(align_offset[1])))
-            if abs(align_offset[0]) < 0.0008 and abs(align_offset[1]) < 0.0008:
+            if abs(align_offset[0]) < 0.0008 and abs(align_offset[1]) < 0.0005:
                 self.log(f"偏移量已小于阈值，无需移动")
                 return True
             else:

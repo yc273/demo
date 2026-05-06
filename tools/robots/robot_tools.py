@@ -18,6 +18,7 @@ from .robot_abstraction import RobotFactory, RobotController, RobotBrand
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logs.logger_utils import logger
 # Global state
+global robot_controller
 robot_controller = RobotController()
 
 
@@ -144,7 +145,7 @@ def register_robot_tools(mcp: FastMCP):
             return error_msg
 
     @mcp.tool()
-    async def Rob_movel(tcp_pose: List[float], acceleration: float = 0.2, velocity: float = 0.1) -> str:
+    async def Rob_movel(tcp_pose: List[float], acceleration: float = 0.2, velocity: float = 0.2) -> str:
         """
         控制机器人按TCP位置直线移动
         :param tcp_pose: 6元TCP位置列表 [x, y, z, rx, ry, rz]，单位：m，rad
@@ -171,7 +172,7 @@ def register_robot_tools(mcp: FastMCP):
             return error_msg
         
     @mcp.tool()
-    async def Rob_movetcp(offset: List[float], acceleration: float = 0.2, velocity: float = 0.1) -> str:
+    async def Rob_movetcp(offset: List[float], acceleration: float = 0.2, velocity: float = 0.2) -> str:
         """
         沿工具坐标系移动机器人
         :param offset： 工具坐标系偏移量，6元位姿列表[dx, dy, dz， drx, dry, drz]，单位：m，rad
@@ -431,3 +432,20 @@ def register_robot_tools(mcp: FastMCP):
             logger.error(error_msg)
             return error_msg
     #endregion
+    @mcp.tool()
+    async def Rob_jugle_adjust(tcp_offsets: List[float]) -> bool:
+        """
+        机器人杂耍调整，依次移动到多个位置
+        :param offsets: 位置偏移列表，每个元素为6元位姿偏移 [dx, dy, dz, drx, dry, drz]，单位：m，rad
+        :return: 调整结果
+        功能：机器人杂耍调整，依次移动到多个位置；触发词：机器人杂耍调整、连续位置调整、路径点调整；参数：需提供位置偏移列表，每个元素为6元位姿偏移（[dx, dy, dz, drx, dry, drz]）
+        """
+        wall_normal, angle = await robot_controller.robot.auto_measure_wall_normal(
+            tcp_offsets=tcp_offsets  # 使用指定偏移
+        )
+        success, final_pose = await robot_controller.robot.adjust_to_wall(
+            wall_normal=wall_normal,  # 使用测量得到的法向量
+            mode="perpendicular",      # Z轴垂直墙面
+            return_to_start=False      # 不返回初始位置
+        )
+        return success

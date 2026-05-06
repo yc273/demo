@@ -36,7 +36,6 @@ if ProcessMatching not in sys.path:
     sys.path.insert(0, ProcessMatching)
 # 导入流程匹配类
 from ProcessMatching.ProcessMatching import ProcessMatching
-
 class MCPClient:
     def __init__(self):
         """Initialize MCP client with LLM connection"""
@@ -62,7 +61,7 @@ class MCPClient:
         self.flow_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prompt_flows")
         self.process_matcher = ProcessMatching(self.flow_dir)
         
-
+    
     async def connect_to_mcp_server_io(self, server_script_path: str):
         """通过标准I/O连接到MCP服务器"""
         self.logger.info(f"尝试通过标准I/O连接到MCP服务器: {server_script_path}")
@@ -679,109 +678,14 @@ class MCPClient:
             return False
 
     #region 角度调整
-    async def test_angle_adjustment(self):
-        """
-        测试角度调整流程
-        """
-        global robot_connected, vision_connected, is_tool_set
-        
-        print("=== 测试角度调整流程 ===")
-        start_time1 = time.time()
-        try:
-            # 确保机器人和视觉已连接
-            if not robot_connected:
-                print("机器人未连接，跳过测试")
-                return False
-                    
-            if not vision_connected:
-                print("视觉未连接，跳过测试")
-                return False
-            
-            if not is_tool_set:
-                print("未选择工具，跳过测试")
-                return False
-
-            max_steps = 6  # 最大调整步数
-            adjustment_completed = False
-            
-            for step in range(1, max_steps + 1):
-                print(f"\n--- 角度调整步骤 {step} ---")
-                # 获取法向量
-                # await asyncio.sleep(5)
-                start_time = time.time()
-                print("获取法向量...")
-                normal_vector_result = await self.session.call_tool("Cam_get_normal_vector", {})
-                normal_vector_text = normal_vector_result.content[0].text if normal_vector_result.content else "获取失败"
-                print(f"获取法向量结果: {normal_vector_text}")
-                end_time = time.time()
-                print(f"获取法向量耗时: {end_time - start_time:.2f} 秒")
-                # await asyncio.sleep(5)
-                # 解析法向量
-                try:
-                    normal_vector = json.loads(normal_vector_text)
-                    print(f"法向量: {normal_vector}")
-                except json.JSONDecodeError:
-                    # 如果不是JSON格式，直接使用文本
-                    normal_vector = normal_vector_text
-                    print(f"法向量: {normal_vector}")
-                
-                # 检查是否获取到法向量
-                if not normal_vector:
-                    print("未能获取法向量，跳过本次调整")
-                    continue
-                
-                # 判断是否完成调整
-                print("判断是否完成角度调整...")
-                estimate_result = await self.session.call_tool("Alg_angle_adjust_estimate", {"measured_z": normal_vector})
-                estimate_result_text = estimate_result.content[0].text if estimate_result.content else "判断失败"
-                print(f"判断调整状态结果: {estimate_result_text}")
-                
-                # 如果完成调整则退出循环
-                if "是" in str(estimate_result_text):
-                    print("角度调整完成")
-                    adjustment_completed = True
-                    break
-                
-                # 计算调整量
-                print("计算角度调整量...")
-                offset_result = await self.session.call_tool("Alg_angle_adjust", {"measured_z": normal_vector})
-                offset_result_text = offset_result.content[0].text if offset_result.content else "计算失败"
-                print(f"计算角度调整量结果: {offset_result_text}")
-                
-                # 解析调整量
-                try:
-                    offset_value = json.loads(offset_result_text)
-                    print(f"解析后的调整量: {offset_value}")
-                except json.JSONDecodeError:
-                    # 如果不是JSON格式，直接使用文本
-                    offset_value = offset_result_text
-                    print(f"调整量: {offset_value}")
-                
-                # 检查是否获取到调整量
-                if not offset_value:
-                    print("未能计算出角度调整量，跳过本次调整")
-                    continue
-                    
-                # 移动机器人
-                print(f"移动机器人，调整量: {offset_value}")
-                move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset_value})
-                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
-                print(f"移动机器人结果: {move_result_text}")
-                # await asyncio.sleep(2)
-            if adjustment_completed:
-                print("角度调整流程测试完成")
-                end_time1 = time.time()
-                print(f"螺钉调整总耗时: {end_time1 - start_time1:.2f} 秒")
-                return True
-            else:
-                print(f"角度调整流程测试未完成，达到最大调整步数 {max_steps}")
-                return False
-            
-        except Exception as e:
-            print(f"测试角度调整流程时出错: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+    async def test_angle_adjustment(self,tcp_offset: float=0):
+        global robot_connected
+        if tcp_offset==0:
+            tcp_offsets= None
+        else:
+            tcp_offsets=[[0,0,0,0,0,0],[tcp_offset,0,0,0,0,0],[0,tcp_offset,0,0,0,0]]
+        await self.session.call_tool("Rob_jugle_adjust", {"tcp_offsets": tcp_offsets})
+        return True
 
     #region 深度调整
     async def test_depth_adjustment(self,need_deep):
@@ -2242,7 +2146,7 @@ class MCPClient:
                 print("未选择工具，跳过测试")
                 return False
 
-            max_steps = 5  # 最大调整步数
+            max_steps = 1  # 最大调整步数
             adjustment_completed = False
             current_pos_result = await self.session.call_tool("Rob_get_current_joint_pos", {})
             current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
@@ -2250,22 +2154,22 @@ class MCPClient:
                 print("获取当前关节位置失败，无法进行调整")
                 return False
             
-            # 解析当前位置
-            import json
-            try:
-                current_pos = json.loads(current_pos_text)
-                # 修改第6个元素（索引5）
-                current_pos[5] = 0
-            except json.JSONDecodeError:
-                print("解析关节位置数据失败")
-                return False
-            except IndexError:
-                print("关节位置数据长度不足，无法修改第6个元素")
-                return False
+            # # 解析当前位置
+            # import json
+            # try:
+            #     current_pos = json.loads(current_pos_text)
+            #     # 修改第6个元素（索引5）
+            #     current_pos[5] = 4.053998426654869
+            # except json.JSONDecodeError:
+            #     print("解析关节位置数据失败")
+            #     return False
+            # except IndexError:
+            #     print("关节位置数据长度不足，无法修改第6个元素")
+            #     return False
             
-            move_result = await self.session.call_tool("Rob_movej", {
-                    "joint_angles": current_pos
-                })
+            # move_result = await self.session.call_tool("Rob_movej", {
+            #         "joint_angles": current_pos
+            #     })
             for step in range(1, max_steps + 1):
                 print(f"\n--- 位置调整步骤 {step} ---")
                 await asyncio.sleep(2)  # 等待机器人移动完成
@@ -2329,14 +2233,14 @@ class MCPClient:
                     print("未能计算出移动偏移量，跳过本次调整")
                     continue
                     
-                # 移动机器人
-                print(f"移动机器人，偏移量: {offset_value}")
-                move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset_value})
-                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
-                print(f"移动机器人结果: {move_result_text}")
-                await asyncio.sleep(5)  # 等待机器人移动完成
-            end_time= time.time()
-            print(f"位置调整总耗时: {end_time - start_time:.2f} 秒")
+            #     # 移动机器人
+            #     print(f"移动机器人，偏移量: {offset_value}")
+            #     move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset_value})
+            #     move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+            #     print(f"移动机器人结果: {move_result_text}")
+            #     await asyncio.sleep(5)  # 等待机器人移动完成
+            # # end_time= time.time()
+            # print(f"位置调整总耗时: {end_time - start_time:.2f} 秒")
             if adjustment_completed:
                 print("位置调整流程测试完成")
                 return True
@@ -3399,22 +3303,22 @@ class MCPClient:
             if "失败" in current_pos_text or not current_pos_text:
                 print("获取当前关节位置失败，无法进行调整")
                 return False
-           # 解析当前位置
-            import json
-            try:
-                current_pos = json.loads(current_pos_text)
-                # 修改第 6 个元素（索引 5）
-                current_pos[5] = 0
-            except json.JSONDecodeError:
-                print("解析关节位置数据失败")
-                return False
-            except IndexError:
-                print("关节位置数据长度不足，无法修改第 6 个元素")
-                return False
+        #    # 解析当前位置
+        #     import json
+        #     try:
+        #         current_pos = json.loads(current_pos_text)
+        #         # 修改第 6 个元素（索引 5）
+        #         current_pos[5] = -1.4046758885900763
+        #     except json.JSONDecodeError:
+        #         print("解析关节位置数据失败")
+        #         return False
+        #     except IndexError:
+        #         print("关节位置数据长度不足，无法修改第 6 个元素")
+        #         return False
             
-            move_result = await self.session.call_tool("Rob_movej", {
-                    "joint_angles": current_pos
-                })
+        #     move_result = await self.session.call_tool("Rob_movej", {
+        #             "joint_angles": current_pos
+        #         })
             
             for step in range(1, max_steps + 1):
                 joint_pos = await self.session.call_tool("Rob_get_current_joint_pos")
@@ -3508,6 +3412,184 @@ class MCPClient:
         print(f"连接状态：{connect_result_text}")
         io_connected = True
         return True
+    
+#endgion
+#region 获取深度
+    async def get_depth(self):
+        """
+        获取深度值流程
+        """        
+        print("=== 获取深度 ===")
+        if not io_connected:
+            print("IO控制器未连接，跳过测试")
+            return False         
+            # if not vision_connected:
+            #     print("视觉未连接，跳过测试")
+            #     return False
+            
+            # if not is_tool_set:
+            #     print("未选择工具，跳过测试")
+            #     return False
+
+        print("获取深度...")
+        start1_time = time.time()
+        depth_result = await self.session.call_tool("Io_get_laser_depth", {})
+        depth_text = depth_result.content[0].text if depth_result.content else "获取失败"
+        print(f"获取深度结果: {depth_text}")
+        return True
+#endgion
+
+#region 放板位置调整
+    async def board_position_adjustment(self):
+        """
+        测试放板位置调整流程
+        """
+        global robot_connected, vision_connected, is_tool_set
+        start_time = time.time()
+        print("=== 测试放板位置调整流程 ===")
+        
+        try:
+            # 确保机器人和视觉已连接
+            if not robot_connected:
+                print("机器人未连接，跳过测试")
+                return False
+                    
+            if not vision_connected:
+                print("视觉未连接，跳过测试")
+                return False
+            
+            if not is_tool_set:
+                print("未选择工具，跳过测试")
+                return False
+
+            max_steps = 5  # 最大调整步数
+            adjustment_completed = False
+            current_pos_result = await self.session.call_tool("Rob_get_current_joint_pos", {})
+            current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
+            if "失败" in current_pos_text or not current_pos_text:
+                print("获取当前关节位置失败，无法进行调整")
+                return False
+            
+            # 解析当前位置
+            import json
+            try:
+                current_pos = json.loads(current_pos_text)
+                # 修改第6个元素（索引5）
+                current_pos[5] = 4.08764837463332
+            except json.JSONDecodeError:
+                print("解析关节位置数据失败")
+                return False
+            except IndexError:
+                print("关节位置数据长度不足，无法修改第6个元素")
+                return False
+            
+            move_result = await self.session.call_tool("Rob_movej", {
+                    "joint_angles": current_pos
+                })
+            for step in range(1, max_steps + 1):
+                print(f"\n--- 放板位置调整步骤 {step} ---")
+                await asyncio.sleep(2)  # 等待机器人移动完成
+                # 获取十字交叉点像素坐标
+                print("获取十字交叉点像素坐标...")
+                start_step_time = time.time()
+                screw_points_result = await self.session.call_tool("Cam_get_cross_points", {})
+                screw_points_text = screw_points_result.content[0].text if screw_points_result.content else "获取失败"
+                print(f"获取十字交叉点像素坐标结果: {screw_points_text}")
+                end_time_step = time.time()
+                print(f"获取十字交叉点像素坐标耗时: {end_time_step - start_step_time:.2f} 秒")
+                # 解析十字交叉点坐标
+                try:
+                    screw_point = json.loads(screw_points_text)
+                    # 如果是列表且有元素，取第一个点
+                    if isinstance(screw_point, list) and len(screw_point) > 0:
+                        if isinstance(screw_point[0], list):
+                            screw_point = screw_point[0]
+                        else:
+                            screw_point = screw_point
+                    print(f"十字交叉点坐标: {screw_point}")
+                except json.JSONDecodeError:
+                    # 如果不是JSON格式，直接使用文本
+                    screw_point = screw_points_text
+                    print(f"十字交叉点坐标: {screw_point}")
+                
+                # 检查是否获取到十字交叉点坐标
+                if not screw_point:
+                    print("未能获取十字交叉点坐标，跳过本次调整")
+                    continue
+                
+                # 判断是否完成调整
+                print("判断是否完成放板位置调整...")
+                estimate_result = await self.session.call_tool("Alg_position_adjust_estimate", {"pos": screw_point})
+                estimate_result_text = estimate_result.content[0].text if estimate_result.content else "判断失败"
+                print(f"判断调整状态结果: {estimate_result_text}")
+                
+                # 如果完成调整则退出循环
+                if "是" in str(estimate_result_text):
+                    print("放板位置调整完成")
+                    adjustment_completed = True
+                    break
+                
+                # 计算移动偏移量
+                print("计算移动偏移量...")
+                offset_result = await self.session.call_tool("Alg_position_adjust", {"pos": screw_point})
+                offset_result_text = offset_result.content[0].text if offset_result.content else "计算失败"
+                print(f"计算移动偏移量结果: {offset_result_text}")
+                
+                # 解析偏移量
+                try:
+                    offset_value = json.loads(offset_result_text)
+                    print(f"解析后的偏移量: {offset_value}")
+                except json.JSONDecodeError:
+                    # 如果不是JSON格式，直接使用文本
+                    offset_value = offset_result_text
+                    print(f"偏移量: {offset_value}")
+                
+                # 检查是否获取到偏移量
+                if not offset_value:
+                    print("未能计算出移动偏移量，跳过本次调整")
+                    continue
+                    
+                # 移动机器人
+                print(f"移动机器人，偏移量: {offset_value}")
+                move_result = await self.session.call_tool("Rob_movetcp", {"offset": offset_value})
+                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+                print(f"移动机器人结果: {move_result_text}")
+                await asyncio.sleep(5)  # 等待机器人移动完成
+            end_time= time.time()
+            print(f"放板位置调整总耗时: {end_time - start_time:.2f} 秒")
+            if adjustment_completed:
+                print("放板位置调整流程测试完成")
+                return True
+            else:
+                print(f"放板位置调整流程测试未完成，达到最大调整步数 {max_steps}")
+                return False
+            
+        except Exception as e:
+            print(f"测试放板位置调整流程时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+#endregion
+    async def joint_position_adjustment(self):
+        current_pos_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+        current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
+        if "失败" in current_pos_text or not current_pos_text:
+            print("获取当前tcp位置失败，无法进行调整")
+            return False
+        
+        # 解析当前位置
+        import json
+        current_pos = json.loads(current_pos_text)
+        # 修改第6个元素（索引5）
+        current_pos[3] = -1.5599752854325317
+        current_pos[4] = 0.9452528695876089
+        current_pos[5] = -3.135117482064894
+
+        move_result = await self.session.call_tool("Rob_movel", {
+                "tcp_pose": current_pos
+            })          
+        return True  
+
     #region 交互菜单
     async def interactive_menu(self):
         """
@@ -3539,9 +3621,10 @@ class MCPClient:
             print("\n")
             print("35.获取六角螺套点        36.U型件标定         37.U型件调整 ")
             print("\n")
-            print("38.连接电机              0.退出")
+            print("38.连接电机             39.获取深度          40.放板位置调整   41.板角度调平")
             print("\n")
-
+            print("0.退出")
+            print("\n")
 
             choice = input("请选择操作: ").strip()
             
@@ -3571,7 +3654,9 @@ class MCPClient:
             elif choice == "7":
                 await self.test_screw_adjustment()
             elif choice == "8":
-                await self.test_angle_adjustment()
+                tcp_offsets = input("请输入TCP偏移量 (1个值，用空格分隔): ")
+                tcp_offsets = float(tcp_offsets)
+                await self.test_angle_adjustment(tcp_offsets)
             elif choice == "9":
                 move_command = input("请输入需要调整到哪个深度: ").strip()
                 await self.test_depth_adjustment(move_command)
@@ -3643,6 +3728,12 @@ class MCPClient:
                 await self.test_u_adjustment()
             elif choice == "38":
                 await self.io_connect()
+            elif choice == "39":
+                await self.get_depth()
+            elif choice == "40":
+                await self.board_position_adjustment()
+            elif choice == "41":
+                await self.joint_position_adjustment()
             elif choice == "0":
                 print("退出程序")
                 break

@@ -7,14 +7,13 @@ Robot Abstraction Layer
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Self
+from typing import List, Optional, Self,Tuple
 from enum import Enum
 import json
-
+from tools.io_modules.io_tools import io_controller
 
 from logs.logger_utils import logger
 from regex import T
-
 
 class RobotBrand(Enum):
     """机器人品牌枚举"""
@@ -71,11 +70,11 @@ class RobotAbstraction(ABC):
     async def movetcp(self, offset: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """tcp运动"""
         pass
-
     @abstractmethod
-    async def movetcp_position_to(self, offset: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
+    async def movetcp_to(self, current_pose: List[float], offset: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """tcp运动"""
         pass
+    
     @abstractmethod
     async def get_current_tcp_pos(self) -> Optional[List[float]]:
         """获取当前TCP位置"""
@@ -119,6 +118,47 @@ class RobotAbstraction(ABC):
     @abstractmethod
     async def movel_nonblocking(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """非阻塞直线运动"""
+        pass
+
+    @abstractmethod
+    async def auto_measure_wall_normal(self, tcp_offsets: List[List[float]] = None) -> Tuple[List[float], float]:
+        """
+        自动测量墙壁法向量（动态流程）
+
+        参数:
+            sensor_read_func: 传感器读取函数，返回距离值（米）
+                            例如: lambda: read_laser_distance()
+            tcp_offsets: 3个测量位置的TCP偏移（工具系，米）
+                        默认: [[0,0,0], [0.05,0,0], [0,0.05,0]] (当前位置、X+5cm、Y+5cm)
+
+        流程:
+            1. 记录初始位置
+            2. 移动到3个测量点
+            3. 每个点读取机器人位姿 + 传感器距离
+            4. 计算墙壁法向量和夹角
+            5. 返回初始位置
+
+        返回:
+            wall_normal: 墙壁法向量 [nx, ny, nz]
+            angle: 机器人末端与墙壁夹角（度）
+        """
+        pass
+
+    @abstractmethod
+    async def adjust_to_wall(self, wall_normal: List[float] = None, mode: str = "perpendicular",
+                            return_to_start: bool = True) -> Tuple[bool, List[float]]:
+        """
+        调整姿态对齐墙壁
+
+        参数:
+            wall_normal: 墙壁法向量 [nx, ny, nz]，None则自动测量
+            mode: "perpendicular"(Z轴垂直墙面) 或 "parallel"(Z轴平行墙面)
+            return_to_start: 是否返回起始位置
+
+        返回:
+            success: 是否成功
+            final_pose: 最终姿态 [x,y,z,rx,ry,rz]
+        """
         pass
 
 #############################################################################################################################################################
@@ -454,7 +494,7 @@ class UniversalRobotsRobot(RobotAbstraction):
                          self._rotation_matrix[2][2] * tool_offset[2])
                          
         return base_offset
-#region ur movetcp
+
     async def movetcp(self, offset: List[float], acceleration: float = 0.2, velocity: float = 0.2, 
                     radius: float = 0, block: bool = True) -> bool:
         """
@@ -467,7 +507,7 @@ class UniversalRobotsRobot(RobotAbstraction):
         :return: 运动是否成功
         """
         if self.robot_ip not in self.robot_list:
-            print(f"机器人 {self.robot_ip} 未连接")
+            logger.info(f"机器人 {self.robot_ip} 未连接")
             return False
             
         try:
@@ -639,6 +679,265 @@ class UniversalRobotsRobot(RobotAbstraction):
         """这个方法在线程池中执行，不会阻塞主协程"""
         robot.movel(tcp_pose, acceleration, velocity)
 
+    # ==================== 墙壁法向量自动测量和调整 ====================
+
+    async def auto_measure_wall_normal(self, tcp_offsets: List[List[float]] = None) -> Tuple[List[float], float]:
+        """
+        UR机器人：自动测量墙壁法向量
+        """
+        if self.robot_ip not in self.robot_list:
+            self.logger.warning(f"机器人 {self.robot_ip} 未连接")
+            return None, 0.0
+
+        try:
+            # 默认测量偏移：当前位置、X+5cm、Y+5cm
+            if tcp_offsets is None:
+                tcp_offsets = [
+                    [0, 0, 0, 0, 0, 0],           # 位置1：原位
+                    [0.05, 0, 0, 0, 0, 0],       # 位置2：X+5cm
+                    [0, 0.05, 0, 0, 0, 0]        # 位置3：Y+5cm
+                ]
+
+            # 记录初始位置
+            start_pose = await self.get_current_tcp_pos()
+            if start_pose is None:
+                raise Exception("无法获取初始位置")
+
+            self.logger.info(f"开始自动测量墙壁法向量，初始位置: {start_pose}")
+
+            # 存储3个测量点的数据
+            robot_poses = []
+            distances = []
+
+            # 移动到3个测量点并采集数据
+            for i, offset in enumerate(tcp_offsets):
+                self.logger.info(f"移动到测量点 {i+1}/3，偏移: {offset[:3]}")
+
+                # 移动到测量点
+                if i > 0:  # 第一个点是当前位置，不需要移动
+                    await self.movetcp(offset, acceleration=0.2, velocity=0.1)
+
+                # 读取机器人位姿
+                current_pose = await self.get_current_tcp_pos()
+                if current_pose is None:
+                    raise Exception(f"测量点{i+1}: 无法获取机器人位姿")
+                await asyncio.sleep(1)  # 等待位姿稳定
+                # 读取传感器距离
+                distance = 1
+                self.logger.info(f"测量点{i+1}: 位姿={current_pose}, 距离={distance:.6f}m")
+
+                robot_poses.append(current_pose)
+                distances.append(distance)
+
+            # 计算墙壁法向量
+            wall_normal, angle = self._calculate_wall_normal_from_measurements(robot_poses, distances)
+            self.logger.info(f"墙壁法向量计算完成: {wall_normal}, 夹角: {angle:.2f}°")
+
+            # 返回初始位置
+            self.logger.info("返回初始位置")
+            target_pose = [
+                start_pose[0], start_pose[1], start_pose[2],
+                start_pose[3], start_pose[4], start_pose[5]
+            ]
+            await self.movel(target_pose, acceleration=0.3, velocity=0.2)
+            return wall_normal, angle
+
+        except Exception as e:
+            self.logger.error(f"自动测量墙壁法向量失败: {str(e)}")
+            # 尝试返回初始位置
+            try:
+                start_pose = await self.get_current_tcp_pos()
+                if start_pose:
+                    await self.movel(start_pose, acceleration=0.3, velocity=0.2)
+            except:
+                pass
+            return None, 0.0
+
+    async def adjust_to_wall(self, wall_normal: List[float] = None, mode: str = "perpendicular",
+                           return_to_start: bool = True) -> Tuple[bool, List[float]]:
+        """
+        UR机器人：调整姿态对齐墙壁
+        """
+        if self.robot_ip not in self.robot_list:
+            self.logger.warning(f"机器人 {self.robot_ip} 未连接")
+            return False, []
+
+        try:
+            # 记录初始位置
+            start_pose = await self.get_current_tcp_pos()
+            if start_pose is None:
+                raise Exception("无法获取初始位置")
+
+            # 如果没有提供法向量，自动测量
+            if wall_normal is None:
+                self.logger.info("未提供墙壁法向量，开始自动测量...")
+                # 需要用户提供传感器读取函数
+                raise Exception("自动测量需要提供传感器读取函数，请先调用 auto_measure_wall_normal")
+
+            # 计算机器人末端当前Z轴方向
+            current_rot_mat = self._rot_vec_to_rot_mat(*start_pose[3:6])
+            current_z_dir = np.array([current_rot_mat[0][2], current_rot_mat[1][2], current_rot_mat[2][2]])
+
+            # 通过点积判断法向量方向是否正确
+            # 如果点积 < 0，说明夹角 > 90°，需要反转法向量
+            wall_normal_arr = np.array(wall_normal)
+            wall_normal_arr = wall_normal_arr / np.linalg.norm(wall_normal_arr)
+            dot_product = np.dot(current_z_dir, wall_normal_arr)
+
+            if dot_product < 0:
+                # 夹角大于90度，取反法向量
+                wall_normal_arr = -wall_normal_arr
+                self.logger.info(f"法向量方向修正（夹角>90°），修正后: {wall_normal_arr}")
+            else:
+                self.logger.info(f"法向量方向正确（夹角<90°），使用: {wall_normal_arr}")
+
+            # 计算目标姿态
+            current_rotation = start_pose[3:6]
+            target_rotation = self._calculate_pose_from_normal(wall_normal_arr.tolist(), current_rotation, mode)
+
+            self.logger.info(f"调整姿态: 当前={current_rotation}, 目标={target_rotation}")
+
+            # 构造目标位姿（保持位置不变，只改变姿态）
+            target_pose = [
+                start_pose[0], start_pose[1], start_pose[2],
+                target_rotation[0], target_rotation[1], target_rotation[2]
+            ]
+
+            # 执行姿态调整
+            self.logger.info("执行姿态调整...")
+            await self.movel(target_pose, acceleration=0.2, velocity=0.1)
+
+            final_pose = await self.get_current_tcp_pos()
+            self.logger.info(f"姿态调整完成: {final_pose}")
+
+            # 验证
+            rot_mat = self._rot_vec_to_rot_mat(*final_pose[3:6])
+            z_dir = np.array([rot_mat[0][2], rot_mat[1][2], rot_mat[2][2]])
+            dot_product = np.dot(z_dir, wall_normal_arr)
+            self.logger.info(f"验证: Z轴与法向量点积={dot_product:.6f} (应接近±1.0)")
+
+            return True, final_pose
+
+        except Exception as e:
+            self.logger.error(f"调整姿态失败: {str(e)}")
+            return False, []
+
+    def _calculate_wall_normal_from_measurements(self, robot_poses: List[List[float]], distances: List[float]) -> Tuple[List[float], float]:
+        """根据测量数据计算墙壁法向量"""
+        if len(robot_poses) != 3 or len(distances) != 3:
+            raise ValueError("需要3个测量点")
+
+        wall_points = []
+        robot_directions = []
+
+        # 计算3个墙面点
+        for i in range(3):
+            x, y, z = robot_poses[i][0:3]
+            rx, ry, rz = robot_poses[i][3:6]
+
+            # 轴角 → 旋转矩阵
+            rot_mat = self._rot_vec_to_rot_mat(rx, ry, rz)
+            z_direction = np.array([rot_mat[0][2], rot_mat[1][2], rot_mat[2][2]])
+            robot_directions.append(z_direction)
+
+            # 计算墙面点
+            wall_point = [
+                x + distances[i] * z_direction[0],
+                y + distances[i] * z_direction[1],
+                z + distances[i] * z_direction[2]
+            ]
+            wall_points.append(wall_point)
+
+        wall_points = np.array(wall_points)
+
+        # 计算法向量（叉积）
+        v1 = wall_points[1] - wall_points[0]
+        v2 = wall_points[2] - wall_points[0]
+        wall_normal = np.cross(v1, v2)
+
+        if np.linalg.norm(wall_normal) < 1e-10:
+            raise ValueError("三点共线，无法确定法向量")
+
+        wall_normal_unit = wall_normal / np.linalg.norm(wall_normal)
+
+        # 计算夹角
+        robot_direction_unit = robot_directions[0] / np.linalg.norm(robot_directions[0])
+        dot_with_normal = np.dot(robot_direction_unit, wall_normal_unit)
+        target_direction = wall_normal_unit if dot_with_normal >= 0 else -wall_normal_unit
+
+        dot_product = np.clip(np.dot(robot_direction_unit, target_direction), -1.0, 1.0)
+        angle_rad = np.arccos(dot_product)
+        angle_degrees = np.degrees(angle_rad)
+
+        return wall_normal_unit.tolist(), angle_degrees
+
+    def _calculate_pose_from_normal(self, target_normal: List[float], current_pose: List[float] = None, mode: str = "perpendicular") -> List[float]:
+        """
+        根据法向量计算机器人姿态
+
+        注意：传入的 target_normal 应该已经是正确的方向
+        （在 adjust_to_wall 中已经通过点积判断并修正过方向）
+        """
+        normal = np.array(target_normal)
+        normal = normal / np.linalg.norm(normal)
+
+        if mode == "perpendicular":
+            # 垂直模式：Z轴对齐到法向量
+            # 法向量方向已经在 adjust_to_wall 中修正过，直接使用
+            z_axis = normal
+        elif mode == "parallel":  # 平行墙壁
+            reference = np.array([1, 0, 0]) if abs(normal[0]) < 0.9 else np.array([0, 1, 0])
+            z_axis = np.cross(normal, reference)
+            z_axis = z_axis / np.linalg.norm(z_axis)
+        else:
+            raise ValueError("mode必须是'perpendicular'或'parallel'")
+
+        if current_pose is not None:
+            current_rot_mat = self._rot_vec_to_rot_mat(*current_pose)
+            current_z = np.array([current_rot_mat[0][2], current_rot_mat[1][2], current_rot_mat[2][2]])
+
+            rotation_axis = np.cross(current_z, z_axis)
+            cos_theta = np.clip(np.dot(current_z, z_axis), -1.0, 1.0)
+            theta = np.arccos(cos_theta)
+
+            if theta < 1e-6:
+                return current_pose
+
+            rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
+
+            K = np.array([
+                [0, -rotation_axis[2], rotation_axis[1]],
+                [rotation_axis[2], 0, -rotation_axis[0]],
+                [-rotation_axis[1], rotation_axis[0], 0]
+            ])
+
+            R_align = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
+
+            current_x = np.array([current_rot_mat[0][0], current_rot_mat[1][0], current_rot_mat[2][0]])
+            rotated_x = np.dot(R_align, current_x)
+            x_axis = rotated_x - np.dot(rotated_x, z_axis) * z_axis
+            x_norm = np.linalg.norm(x_axis)
+
+            if x_norm < 1e-6:
+                if abs(z_axis[1]) < 0.9:
+                    x_axis = np.cross(z_axis, np.array([0, 1, 0]))
+                else:
+                    x_axis = np.cross(z_axis, np.array([0, 0, 1]))
+            else:
+                x_axis = x_axis / x_norm
+
+            y_axis = np.cross(z_axis, x_axis)
+        else:
+            if abs(z_axis[1]) < 0.9:
+                x_axis = np.cross(z_axis, np.array([0, 1, 0]))
+            else:
+                x_axis = np.cross(z_axis, np.array([0, 0, 1]))
+            x_axis = x_axis / np.linalg.norm(x_axis)
+            y_axis = np.cross(z_axis, x_axis)
+
+        rot_mat = np.column_stack([x_axis, y_axis, z_axis])
+        return self._rot_mat_to_rot_vec(rot_mat)
+
 def calculate_distance(pose1: List[float], pose2: List[float]) -> float:
     """计算两个位姿之间的距离"""
     return math.sqrt(sum((p1 - p2) ** 2 for p1, p2 in zip(pose1[:3], pose2[:3])))
@@ -717,7 +1016,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def movej_2(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """duco机器人关节运动_2"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
     
         try:
@@ -734,7 +1033,7 @@ class DucocobotRobot(RobotAbstraction):
     
     async def movej(self, joint_angles: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """duco机器人关节运动_2"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
     
         try:
@@ -751,7 +1050,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def movel(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """duco机器人直线运动"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         
         try:
@@ -768,7 +1067,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def movetcp(self, offset: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """duco机器人TCP运动"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         
         try:
@@ -785,7 +1084,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def get_current_tcp_pos(self) -> Optional[List[float]]:
         """获取duco机器人当前TCP位置"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return None
         
         try:
@@ -796,7 +1095,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def get_current_joint_pos(self) -> Optional[List[float]]:
         """获取duco机器人当前关节角度"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return None
         
         try:
@@ -808,7 +1107,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def set_tool(self, tcp: List[float]) -> bool:
         """设置duco机器人TCP"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         
         try:
@@ -821,7 +1120,7 @@ class DucocobotRobot(RobotAbstraction):
         
     async def set_payload(self, mass: float, cog: List[float]) -> bool:
         """设置duco机器人负载"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         
         try:
@@ -851,13 +1150,13 @@ class DucocobotRobot(RobotAbstraction):
         """等待duco机器人运动完成"""
         if not self.robot:
             return False
-
+        
         try:
-            await asyncio.sleep(0.5)
+            time.sleep(0.5)
             while self.robot.robotmoving():
-                await asyncio.sleep(1)
+                time.sleep(1)
 
-
+            
             self.state = RobotState.CONNECTED
             return True
         except Exception as e:
@@ -866,7 +1165,7 @@ class DucocobotRobot(RobotAbstraction):
         
     async def enter_teach_mode(self) -> bool:
         """duco机器人进入示教模式"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         
         try:
@@ -879,7 +1178,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def exit_teach_mode(self) -> bool:
         """duco机器人退出示教模式"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             return False
         try:
             self.robot.end_teach_mode(False)#直接返回
@@ -891,7 +1190,7 @@ class DucocobotRobot(RobotAbstraction):
 
     async def movel_nonblocking(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """非阻塞直线运动 - Ducocobot实现"""
-        if not self.robot or self.state != RobotState.CONNECTED:
+        if not self.robot or self.state == RobotState.DISCONNECTED:
             self.logger.warning("Ducocobot机器人未连接")
             return False
 
@@ -933,7 +1232,6 @@ class DucocobotRobot(RobotAbstraction):
 # 从当前目录的 Dazu 子目录导入 CPS.pyd
 from .Dazu.CPS import CPSClient
 
-import math
 
 
 
@@ -968,7 +1266,7 @@ class DaZuRobot(RobotAbstraction):
         """连接机器人"""
         if self.state == RobotState.CONNECTED  and  self.cps.HRIF_IsConnected(0):
 
-            print("机器人已连接")
+            logger.info("机器人已连接")
             return True
 
         try:
@@ -982,24 +1280,23 @@ class DaZuRobot(RobotAbstraction):
             return True
 
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
 
     async def disconnect(self) -> bool:
         """断开连接"""
         if self.state == RobotState.DISCONNECTED:
-            print("机器人未连接")
+            logger.info("机器人未连接")
             return True
 
         try:    
             nRet = self.cps.HRIF_DisConnect(0)     
             if nRet != 0:
-                self.state = RobotState.CONNECTED
                 raise Exception("断开连接失败")
             self.state = RobotState.DISCONNECTED
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
 
     async def set_speed_ratio(self, speed_ratio: float) -> bool:
@@ -1013,17 +1310,18 @@ class DaZuRobot(RobotAbstraction):
                 
                 #需要设置的速度比(0.01~1
                 speed_ratio = speed_ratio/100
-                print("1111111111111111111111111111111111111111")
+                
                 nRet = self.cps.HRIF_SetOverride(0,0, speed_ratio)
                 if nRet != 0:
                     raise Exception("设置速度比例失败")
                 return True
             except Exception  as e:
-                print(e)
+                logger.error(e)
                 return False
         else:
-            print("机器人未连接")
+            logger.info("机器人未连接1")
             return False
+
 
     async def run_script(self, script: str) -> bool:
         """运行示教器自定义脚本"""
@@ -1033,7 +1331,8 @@ class DaZuRobot(RobotAbstraction):
         
         try:
             if(script):
-                nRet = await self.cps.HRIF_SwitchScript(0,0,script)
+                nRet = self.cps.HRIF_SwitchScript(0,0,script)
+                nRet = self.cps.HRIF_StartScript(0)
                 if nRet != 0:
                     raise Exception("运行脚本失败")
             return True
@@ -1053,6 +1352,8 @@ class DaZuRobot(RobotAbstraction):
         try:
             v=velocity
             a=acceleration
+            await self.set_speed_ratio(100)  # 设置默认速度为100%
+
             self.state = RobotState.MOVING
             #自定义默认空间位置
             Point=[0,0,0,0,0,0]   
@@ -1069,21 +1370,20 @@ class DaZuRobot(RobotAbstraction):
             nIOState = 0 # 定义检测的DI状态 
             strCmdID = "0" # 定义路点ID
             
-            await self.set_speed_ratio(100)  # 设置默认速度为100%
-
+        
             nRet = self.cps.HRIF_MoveJ(0,0, Point, joint_angles, sTcpName , sUcsName, velocity, acceleration,dRadius,nIsUseJoint, nIsSeek, nIOBit, nIOState, strCmdID)
             if nRet != 0:
                 logger.error(f"关节运动失败，错误代码: {nRet}")
                 raise Exception("关节运动失败")
             if nRet ==40082:
-                await self.movej(joint_angles, acceleration, velocity)
+                await self.movej(joint_angles, acceleration-0.1, velocity-0.1)
             
             await self.wait_for_movement_completion()
             return True
 
             
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
 
     #使用tcp参数,来进行关节移动  
@@ -1091,7 +1391,7 @@ class DaZuRobot(RobotAbstraction):
     async def movej_2(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
 
         if not await self.Isconnect() or self.state == RobotState.DISCONNECTED:
-            print("机器人未连接")
+            logger.info("机器人未连接")
             return False
         try:
             await self.set_speed_ratio(100)  # 设置默认速度为100%
@@ -1115,14 +1415,13 @@ class DaZuRobot(RobotAbstraction):
         
             nRet = self.cps.HRIF_MoveJ(0,0, tcp_pose, joint, sTcpName , sUcsName, velocity, acceleration,dRadius,nIsUseJoint, nIsSeek, nIOBit, nIOState, strCmdID)
             if nRet != 0:
-                self.state = RobotState.CONNECTED
                 raise Exception("关节运动失败")
             await self.wait_for_movement_completion()
             return True
   
             
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
                     
     async def movel(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
@@ -1132,7 +1431,6 @@ class DaZuRobot(RobotAbstraction):
         try:
             self.state = RobotState.MOVING    
             await self.set_speed_ratio(100)  # 设置默认速度为100%
-
             #自定义默认关节角度位置
             joint=[0,0,0,0,0,0]   
             sTcpName ="TCP"
@@ -1150,17 +1448,14 @@ class DaZuRobot(RobotAbstraction):
         
             nRet = self.cps.HRIF_MoveL(0,0, tcp_pose, joint, sTcpName , sUcsName, velocity, acceleration,dRadius, nIsSeek, nIOBit, nIOState, strCmdID)
             if nRet != 0:
-                self.state = RobotState.CONNECTED
                 raise Exception("直线运动失败")
             await self.wait_for_movement_completion()
             return True
-  
+
             
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
-
-#region movetcp工具
     async def movetcp(self, offset, acceleration = 1, velocity = 0.5) -> bool:
         """
         大族机器人沿工具坐标系移动（不依赖HRIF_UcsTcp2Base，手动实现坐标转换）
@@ -1170,7 +1465,7 @@ class DaZuRobot(RobotAbstraction):
         :return: 运动是否成功
         """
         if await self.Isconnect() != True:
-            print(f"机器人 {self.robot_ip} 未连接")
+            logger.info(f"机器人 {self.robot_ip} 未连接")
             return False
             
         try:
@@ -1181,10 +1476,10 @@ class DaZuRobot(RobotAbstraction):
             # 获取当前TCP位姿（基座系下，单位：米，弧度）
             current_pose = await self.get_current_tcp_pos()
             if current_pose is None:
-                print("无法获取当前位姿，移动失败")
+                logger.info("无法获取当前位姿，移动失败")
                 return False
             self._current_pose = current_pose
-            print(f"当前TCP位置：{current_pose}")
+            logger.info(f"当前TCP位置：{current_pose}")
             
             # 解析当前位置和姿态
             current_x, current_y, current_z = current_pose[0], current_pose[1], current_pose[2]
@@ -1225,13 +1520,13 @@ class DaZuRobot(RobotAbstraction):
             
             # 组装目标位姿
             target_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
-            print(f"目标TCP位置：{target_pose}")
-            print(f"工具系偏移：{offset}")
+            logger.info(f"目标TCP位置：{target_pose}")
+            logger.info(f"工具系偏移：{offset}")
             
             # 执行直线运动
             success = await self.movel(target_pose, acceleration, velocity)
             if not success:
-                print("移动到目标位姿失败")
+                logger.info("移动到目标位姿失败")
                 return False
             
             # 等待运动完成
@@ -1239,34 +1534,37 @@ class DaZuRobot(RobotAbstraction):
             return True
             
         except Exception as e:
-            print(f"工具坐标系移动失败: {str(e)}")
-            print(f"工具坐标系移动失败: {str(e)}")
+            logger.error(f"工具坐标系移动失败: {str(e)}")
             return False
-    
-    async def movetcp_position_to(self, position: List[float], offset: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
+
+#region movetcp工具
+    async def movetcp_to(self,current_pose, offset, acceleration = 1, velocity = 0.5) -> bool:
         """
-        大族机器人跳过过渡点运动到过渡点沿工具坐标系移动（不依赖HRIF_UcsTcp2Base，手动实现坐标转换）
-        :param position: 目标基坐标系位置 [x, y, z, rx, ry, rz]，前3项为位置（米），后3项为旋转（弧度）
+        大族机器人沿工具坐标系移动（不依赖HRIF_UcsTcp2Base，手动实现坐标转换）
         :param offset: 工具坐标系下的偏移量 [dx, dy, dz, drx, dry, drz]，前3项为位置偏移（米），后3项为旋转偏移（弧度）
         :param velocity: 工具速度（米/秒）
         :param acceleration: 工具加速度（米/秒²）
         :return: 运动是否成功
         """
         if await self.Isconnect() != True:
-            print(f"机器人 {self.robot_ip} 未连接")
+            logger.info(f"机器人 {self.robot_ip} 未连接")
             return False
             
         try:
             # 校验偏移量格式
             if offset is None or len(offset) != 6:
                 raise ValueError("偏移量必须包含6个元素 [dx, dy, dz, drx, dry, drz]")
-            if position is None or len(position) != 6:
-                raise ValueError("位置必须包含6个元素 [x, y, z, rx, ry, rz]")
-                        
-            # 获取当前TCP位姿（基座系下，单位：米，弧度）            
+            
+            # 获取当前TCP位姿（基座系下，单位：米，弧度）
+            if current_pose is None:
+                logger.info("无位姿，移动失败")
+                return False
+            self._current_pose = current_pose
+            logger.info(f"当前TCP位置：{current_pose}")
+            
             # 解析当前位置和姿态
-            current_x, current_y, current_z = position[0], position[1], position[2]
-            rx, ry, rz = position[3], position[4], position[5]  # 旋转分量（弧度）
+            current_x, current_y, current_z = current_pose[0], current_pose[1], current_pose[2]
+            rx, ry, rz = current_pose[3], current_pose[4], current_pose[5]  # 旋转分量（弧度）
             
             # 步骤1：将当前姿态（rx, ry, rz）转换为旋转矩阵（工具系到基座系）
             # 采用Z-Y-X欧拉角旋转顺序（机器人常用）
@@ -1303,13 +1601,13 @@ class DaZuRobot(RobotAbstraction):
             
             # 组装目标位姿
             target_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
-            print(f"目标TCP位置：{target_pose}")
-            print(f"工具系偏移：{offset}")
+            logger.info(f"目标TCP位置：{target_pose}")
+            logger.info(f"工具系偏移：{offset}")
             
             # 执行直线运动
             success = await self.movel(target_pose, acceleration, velocity)
             if not success:
-                print("移动到目标位姿失败")
+                logger.info("移动到目标位姿失败")
                 return False
             
             # 等待运动完成
@@ -1317,9 +1615,9 @@ class DaZuRobot(RobotAbstraction):
             return True
             
         except Exception as e:
-            print(f"工具坐标系移动失败: {str(e)}")
-            print(f"工具坐标系移动失败: {str(e)}")
+            logger.error(f"工具坐标系移动失败: {str(e)}")
             return False
+    
     def _euler_to_rot_matrix(self, rx, ry, rz):
         """
         将欧拉角（rx, ry, rz，弧度）转换为旋转矩阵（Z-Y-X顺序）
@@ -1430,10 +1728,12 @@ class DaZuRobot(RobotAbstraction):
         while angle < -math.pi:
             angle += 2 * math.pi
         return angle
-#endregion
+     
+
+
     async def get_current_tcp_pos(self) -> Optional[List[float]]:  
         """获取大族机器人当前tcp位置"""
-        if not await self.Isconnect() :#or self.state != RobotState.CONNECTED
+        if not await self.Isconnect() :#or self.state == RobotState.DISCONNECTED
                 return None
         try:
             result=[]
@@ -1445,7 +1745,7 @@ class DaZuRobot(RobotAbstraction):
             result = [result[0]/1000, result[1]/1000, result[2]/1000, result[3]/180*math.pi, result[4]/180*math.pi, result[5]/180*math.pi]
             return result
         except Exception as e:
-            print(e)
+            logger.error(e)
             return None
 
     async def get_current_joint_pos(self) -> Optional[List[float]]:
@@ -1462,7 +1762,7 @@ class DaZuRobot(RobotAbstraction):
             result = [result[0]/180*math.pi, result[1]/180*math.pi, result[2]/180*math.pi, result[3]/180*math.pi, result[4]/180*math.pi, result[5]/180*math.pi]
             return result
         except Exception as e:
-            print(e)
+            logger.error(e)
             return None
 
     async def set_tool(self, tcp: List[float]) -> bool:
@@ -1476,7 +1776,7 @@ class DaZuRobot(RobotAbstraction):
                 raise Exception("设置tcp失败")
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
      
     #mass 负载(kg)        cog :dX ,dY ,dZ  (质心朝x轴的偏移量)(mm)
@@ -1498,7 +1798,7 @@ class DaZuRobot(RobotAbstraction):
                 raise Exception("设置负载失败")
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
     
     async def stop(self) -> bool:
@@ -1513,25 +1813,25 @@ class DaZuRobot(RobotAbstraction):
                 raise Exception("紧急停止失败")
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
 
   
     async def wait_for_movement_completion(self) -> bool:
         """等待机器人运动完成"""
-        # if  not await  self.Isconnect():
-        #     return False
-        # try:
-        #     await asyncio.sleep(0.5)
+        if  not await  self.Isconnect():
+            return False
+        try:
+            await asyncio.sleep(0.5)
 
-        #     while await self.robotmoving():
-        #         await asyncio.sleep(1)
+            while await self.robotmoving():
+                await asyncio.sleep(0.5)
 
-        #     if self.state == RobotState.MOVING:
-        #         self.state = RobotState.CONNECTED
-        #     return True    
-        # except Exception as e:
-        #     print(e)
+            if self.state == RobotState.MOVING:
+                self.state = RobotState.CONNECTED
+            return True    
+        except Exception as e:
+            logger.error(e)
         return True
       
       
@@ -1547,11 +1847,11 @@ class DaZuRobot(RobotAbstraction):
             nRet = self.cps.HRIF_GrpOpenFreeDriver(0,0)
             if nRet != 0:
                 raise Exception("进入自由驱动失败")
-            
-            print("进入自由驱动成功")
+
+            logger.info("进入自由驱动成功")
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
         
         
@@ -1567,20 +1867,20 @@ class DaZuRobot(RobotAbstraction):
             if nRet != 0:
                 raise Exception("退出自由驱动失败")
 
-            print("退出自由驱动成功")
+            logger.info("退出自由驱动成功")
             return True
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
 
     async def movel_nonblocking(self, tcp_pose: List[float], acceleration: float = 1.0, velocity: float = 0.5) -> bool:
         """非阻塞直线运动 - DaZu机器人实现"""
         if not await self.Isconnect() or self.state == RobotState.DISCONNECTED:
-            print("DaZu机器人未连接")
+            logger.info("DaZu机器人未连接")
             return False
 
         try:
-            print(f"DaZu movel_nonblocking: {tcp_pose}")
+            logger.info(f"DaZu movel_nonblocking: {tcp_pose}")
 
             # 将阻塞操作放到线程池中执行
             loop = asyncio.get_event_loop()
@@ -1588,7 +1888,7 @@ class DaZuRobot(RobotAbstraction):
             return True
 
         except Exception as e:
-            print(f"DaZu非阻塞直线移动出错: {str(e)}")
+            logger.error(f"DaZu非阻塞直线移动出错: {str(e)}")
             return False
 
     def _blocking_movel(self, tcp_pose: List[float], acceleration: float, velocity: float) -> None:
@@ -1609,24 +1909,327 @@ class DaZuRobot(RobotAbstraction):
         strCmdID = "0" # 定义路点ID        
     
         nRet = self.cps.HRIF_MoveL(0,0, tcp_pose, joint, sTcpName , sUcsName, velocity, acceleration,dRadius, nIsSeek, nIOBit, nIOState, strCmdID)
-
+        if nRet != 0:
+            raise Exception("直线运动失败")
     async def robotmoving(self) -> bool:
         """当前机器人是否在移动"""
         if  not await self.Isconnect():
             return False
-        
+
         try:
             result = [ ]
             nRet = self.cps.HRIF_IsMotionDone(0,0,result)
             if nRet != 0:
-                raise Exception("查询机器人移动状态失败") 
-            
+                raise Exception("查询机器人移动状态失败")
+
             return not result[0]
 
-                   
+
         except Exception as e:
-            print(e)
+            logger.error(e)
             return False
+
+    # ==================== 墙壁法向量自动测量和调整 ====================
+
+    async def auto_measure_wall_normal(self, tcp_offsets: List[List[float]] = None) -> Tuple[List[float], float]:
+        """
+        DaZu机器人：自动测量墙壁法向量
+        """
+        if not await self.Isconnect():
+            logger.warning(f"机器人 {self.robot_ip} 未连接")
+            return None, 0.0
+        # io_controller = IoController()
+
+        # # 带超时的连接
+    
+        # await asyncio.wait_for(
+        #     io_controller.connect_async("192.168.0.21",8899),
+        #     timeout=10
+        # )
+        try:
+            # 默认测量偏移：当前位置、X+5cm、Y+5cm
+            if tcp_offsets is None:
+                tcp_offsets = [
+                    [0, 0, 0, 0, 0, 0],           # 位置1：原位
+                    [0.3, 0, 0, 0, 0, 0],       # 位置2：X+5cm
+                    [0, 0.3, 0, 0, 0, 0]        # 位置3：Y+5cm
+                ]
+
+            # 记录初始位置
+            start_pose = await self.get_current_tcp_pos()
+            if start_pose is None:
+                raise Exception("无法获取初始位置")
+
+            logger.info(f"开始自动测量墙壁法向量，初始位置: {start_pose}")
+
+            # 存储3个测量点的数据
+            robot_poses = []
+            distances = []
+
+            # 移动到3个测量点并采集数据
+            for i, offset in enumerate(tcp_offsets):
+                logger.info(f"移动到测量点 {i+1}/3，偏移: {offset[:3]}")
+
+                # 移动到测量点
+                if i > 0:  # 第一个点是当前位置，不需要移动
+                    await self.movetcp(offset, acceleration=1, velocity=1)
+                await asyncio.sleep(1)
+                # 读取机器人位姿
+                current_pose = await self.get_current_tcp_pos()
+                if current_pose is None:
+                    raise Exception(f"测量点{i+1}: 无法获取机器人位姿")
+                await asyncio.sleep(1)
+                # 读取传感器距离
+                # distance = input(f"请输入传感器距离（米）：")
+                # distance = float(distance)/1000+0.25
+                # logger.info(f"测量点{i+1}: 位姿={current_pose}, 距离={distance:.6f}m")
+                distance = io_controller.get_laser_distance()
+                robot_poses.append(current_pose)
+                distances.append(distance)
+            logger.info(f"测量完成: 位姿={robot_poses}, 距离={distances}")
+            # 计算墙壁法向量
+            wall_normal, angle = self._calculate_wall_normal_from_measurements(robot_poses, distances)
+            logger.info(f"墙壁法向量计算完成: {wall_normal}, 夹角: {angle:.2f}°")
+
+            # 返回初始位置
+            logger.info("返回初始位置")
+            target_pose = [
+                start_pose[0], start_pose[1], start_pose[2],
+                start_pose[3], start_pose[4], start_pose[5]
+            ]
+            await self.movel(target_pose, acceleration=0.8, velocity=0.8)
+
+            return wall_normal, angle
+
+        except Exception as e:
+            logger.error(f"自动测量墙壁法向量失败: {str(e)}")
+            # 尝试返回初始位置
+            try:
+                start_pose = await self.get_current_tcp_pos()
+                if start_pose:
+                    await self.movel(start_pose, acceleration=0.3, velocity=0.2)
+            except:
+                pass
+            return None, 0.0
+
+    async def adjust_to_wall(self, wall_normal: List[float] = None, mode: str = "perpendicular",
+                           return_to_start: bool = True) -> Tuple[bool, List[float]]:
+        """
+        DaZu机器人：调整姿态对齐墙壁
+        """
+        if not await self.Isconnect():
+            logger.warning(f"机器人 {self.robot_ip} 未连接")
+            return False, []
+
+        try:
+            # 记录初始位置
+            start_pose = await self.get_current_tcp_pos()
+            if start_pose is None:
+                raise Exception("无法获取初始位置")
+
+            # 如果没有提供法向量，自动测量
+            if wall_normal is None:
+                logger.info("未提供墙壁法向量，请先自动测量...")
+                raise Exception("自动测量需要提供传感器读取函数，请先调用 auto_measure_wall_normal")
+
+            # 计算机器人末端当前Z轴方向
+            current_rot_mat = self._euler_to_rot_matrix_np(*start_pose[3:6])
+            current_z_dir = current_rot_mat[:, 2]
+
+            # 通过点积判断法向量方向是否正确
+            # 如果点积 < 0，说明夹角 > 90°，需要反转法向量
+            wall_normal_arr = np.array(wall_normal)
+            wall_normal_arr = wall_normal_arr / np.linalg.norm(wall_normal_arr)
+            dot_product = np.dot(current_z_dir, wall_normal_arr)
+
+            if dot_product < 0:
+                # 夹角大于90度，取反法向量
+                wall_normal_arr = -wall_normal_arr
+                logger.info(f"法向量方向修正（夹角>90°），修正后: {wall_normal_arr}")
+            else:
+                logger.info(f"法向量方向正确（夹角<90°），使用: {wall_normal_arr}")
+
+            # 计算目标姿态
+            current_rotation = start_pose[3:6]
+            target_rotation = self._calculate_pose_from_normal(wall_normal_arr.tolist(), current_rotation, mode)
+
+            logger.info(f"调整姿态: 当前={current_rotation}, 目标={target_rotation}")
+
+            # 构造目标位姿（保持位置不变，只改变姿态）
+            target_pose = [
+                start_pose[0], start_pose[1], start_pose[2],
+                target_rotation[0], target_rotation[1], target_rotation[2]
+            ]
+
+            # 执行姿态调整
+            logger.info("执行姿态调整...")
+            await self.movel(target_pose, acceleration=0.2, velocity=0.1)
+            await self.wait_for_movement_completion()
+
+            final_pose = await self.get_current_tcp_pos()
+            logger.info(f"姿态调整完成: {final_pose}")
+
+            # 验证
+            rot_mat = self._euler_to_rot_matrix_np(*final_pose[3:6])
+            z_dir = rot_mat[:, 2]
+            dot_product = np.dot(z_dir, wall_normal)
+            logger.info(f"验证: Z轴与法向量点积={dot_product:.6f} (应接近±1.0)")
+
+            return True, final_pose
+
+        except Exception as e:
+            logger.error(f"调整姿态失败: {str(e)}")
+            return False, []
+
+    def _calculate_wall_normal_from_measurements(self, robot_poses: List[List[float]], distances: List[float]) -> Tuple[List[float], float]:
+        """根据测量数据计算墙壁法向量"""
+        if len(robot_poses) != 3 or len(distances) != 3:
+            raise ValueError("需要3个测量点")
+
+        wall_points = []
+        robot_directions = []
+
+        # 计算3个墙面点
+        for i in range(3):
+            x, y, z = robot_poses[i][0:3]
+            rx, ry, rz = robot_poses[i][3:6]
+
+            # 欧拉角 → 旋转矩阵
+            rot_mat = self._euler_to_rot_matrix_np(rx, ry, rz)
+            z_direction = rot_mat[:, 2]
+            robot_directions.append(z_direction)
+
+            # 计算墙面点
+            wall_point = [
+                x + distances[i] * z_direction[0],
+                y + distances[i] * z_direction[1],
+                z + distances[i] * z_direction[2]
+            ]
+            wall_points.append(wall_point)
+
+        wall_points = np.array(wall_points)
+
+        # 计算法向量（叉积）
+        v1 = wall_points[1] - wall_points[0]
+        v2 = wall_points[2] - wall_points[0]
+        wall_normal = np.cross(v1, v2)
+
+        if np.linalg.norm(wall_normal) < 1e-10:
+            raise ValueError("三点共线，无法确定法向量")
+
+        wall_normal_unit = wall_normal / np.linalg.norm(wall_normal)
+
+        # 计算夹角
+        robot_direction_unit = robot_directions[0] / np.linalg.norm(robot_directions[0])
+        dot_with_normal = np.dot(robot_direction_unit, wall_normal_unit)
+        target_direction = wall_normal_unit if dot_with_normal >= 0 else -wall_normal_unit
+
+        dot_product = np.clip(np.dot(robot_direction_unit, target_direction), -1.0, 1.0)
+        angle_rad = np.arccos(dot_product)
+        angle_degrees = np.degrees(angle_rad)
+
+        return wall_normal_unit.tolist(), angle_degrees
+
+    def _calculate_pose_from_normal(self, target_normal: List[float], current_pose: List[float] = None, mode: str = "perpendicular") -> List[float]:
+        """
+        根据法向量计算机器人姿态（返回欧拉角表示）
+
+        注意：传入的 target_normal 应该已经是正确的方向
+        （在 adjust_to_wall 中已经通过点积判断并修正过方向）
+        """
+        normal = np.array(target_normal)
+        normal = normal / np.linalg.norm(normal)
+
+        if mode == "perpendicular":
+            # 垂直模式：Z轴对齐到法向量
+            # 法向量方向已经在 adjust_to_wall 中修正过，直接使用
+            z_axis = normal
+            logger.info(f"计算目标姿态（垂直模式），法向量: {normal}")
+        elif mode == "parallel":
+            # 平行模式：Z轴平行于墙面
+            reference = np.array([1, 0, 0]) if abs(normal[0]) < 0.9 else np.array([0, 1, 0])
+            z_axis = np.cross(normal, reference)
+            z_axis = z_axis / np.linalg.norm(z_axis)
+        else:
+            raise ValueError("mode必须是'perpendicular'或'parallel'")
+
+        if current_pose is not None:
+            # DaZu使用欧拉角，需要先转换到旋转矩阵
+            current_rot_mat = self._euler_to_rot_matrix_np(*current_pose)
+            current_z = current_rot_mat[:, 2]
+
+            rotation_axis = np.cross(current_z, z_axis)
+            cos_theta = np.clip(np.dot(current_z, z_axis), -1.0, 1.0)
+            theta = np.arccos(cos_theta)
+
+            if theta < 1e-6:
+                return current_pose
+
+            rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
+
+            K = np.array([
+                [0, -rotation_axis[2], rotation_axis[1]],
+                [rotation_axis[2], 0, -rotation_axis[0]],
+                [-rotation_axis[1], rotation_axis[0], 0]
+            ])
+
+            R_align = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
+
+            current_x = current_rot_mat[:, 0]
+            rotated_x = np.dot(R_align, current_x)
+            x_axis = rotated_x - np.dot(rotated_x, z_axis) * z_axis
+            x_norm = np.linalg.norm(x_axis)
+
+            if x_norm < 1e-6:
+                if abs(z_axis[1]) < 0.9:
+                    x_axis = np.cross(z_axis, np.array([0, 1, 0]))
+                else:
+                    x_axis = np.cross(z_axis, np.array([0, 0, 1]))
+            else:
+                x_axis = x_axis / x_norm
+
+            y_axis = np.cross(z_axis, x_axis)
+        else:
+            if abs(z_axis[1]) < 0.9:
+                x_axis = np.cross(z_axis, np.array([0, 1, 0]))
+            else:
+                x_axis = np.cross(z_axis, np.array([0, 0, 1]))
+            x_axis = x_axis / np.linalg.norm(x_axis)
+            y_axis = np.cross(z_axis, x_axis)
+
+        rot_mat = np.column_stack([x_axis, y_axis, z_axis])
+
+        # 旋转矩阵 → 欧拉角（DaZu需要）
+        return self._rot_matrix_to_euler_zyx_np(rot_mat)
+
+    def _euler_to_rot_matrix_np(self, rx, ry, rz):
+        """欧拉角转旋转矩阵（返回NumPy数组）"""
+        mat = self._euler_to_rot_matrix(rx, ry, rz)
+        return np.array(mat)
+
+    def _rot_matrix_to_euler_zyx_np(self, rot_mat):
+        """旋转矩阵转欧拉角（NumPy版本）"""
+        sy = math.sqrt(rot_mat[0, 0] ** 2 + rot_mat[1, 0] ** 2)
+        singular = sy < 1e-10
+
+        if not singular:
+            rx = math.atan2(rot_mat[2, 1], rot_mat[2, 2])
+            ry = math.atan2(-rot_mat[2, 0], sy)
+            rz = math.atan2(rot_mat[1, 0], rot_mat[0, 0])
+        else:
+            rx = math.atan2(-rot_mat[1, 2], rot_mat[1, 1])
+            ry = math.atan2(-rot_mat[2, 0], sy)
+            rz = 0
+
+        return [self._normalize_angle(rx), self._normalize_angle(ry), self._normalize_angle(rz)]
+
+    def _normalize_angle(self, angle):
+        """角度归一化"""
+        while angle > math.pi:
+            angle -= 2 * math.pi
+        while angle < -math.pi:
+            angle += 2 * math.pi
+        return angle
 
 
 

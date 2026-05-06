@@ -438,11 +438,10 @@ class VisionApi:
 
 
 #region 辅助方法
-
     async def _read_full_response(self) -> str:
         loop = asyncio.get_event_loop()
         buffer = bytearray()
-        timeout = time.time() + 20  # 10秒超时
+        timeout = time.time() + 20  # 20秒超时
 
         while time.time() < timeout:
             if self.client is None:
@@ -458,22 +457,91 @@ class VisionApi:
                     break  # 连接关闭
                 buffer.extend(data)
 
-                # 检查是否是完整的JSON对象
-                current_json = buffer.decode('utf-8')
-                if self._is_valid_json(current_json):
-                    self.logger.info(f"读取完成（字节数: {len(buffer)}）")
-                    return current_json
+                # 尝试从缓冲区中提取第一个完整的 JSON 对象
+                try:
+                    # 将缓冲区转换为字节串以便查找
+                    buffer_bytes = bytes(buffer)
+                    
+                    # 查找第一个 '{' 的位置
+                    json_start = buffer_bytes.find(b'{')
+                    if json_start == -1:
+                        # 没有找到 JSON 开始标记，继续读取
+                        continue
+                    
+                    # 从第一个 '{' 开始，查找匹配的 '}'
+                    brace_count = 0
+                    json_end = -1
+                    for i in range(json_start, len(buffer_bytes)):
+                        byte = buffer_bytes[i:i+1]
+                        if byte == b'{':
+                            brace_count += 1
+                        elif byte == b'}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end = i + 1
+                                break
+                    
+                    if json_end > json_start:
+                        # 提取可能的 JSON 字节序列
+                        json_bytes = buffer_bytes[json_start:json_end]
+                        
+                        # 尝试解码为 UTF-8
+                        try:
+                            json_str = json_bytes.decode('utf-8')
+                            # 验证是否是有效的 JSON
+                            json.loads(json_str)
+                            
+                            self.logger.info(f"成功读取 JSON（原始缓冲: {len(buffer)} 字节, JSON: {len(json_str)} 字符）")
+                            return json_str
+                        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                            # JSON 不完整或格式错误，继续读取更多数据
+                            self.logger.debug(f"JSON 解析失败，继续读取... ({type(e).__name__}: {e})")
+                            continue
+                    else:
+                        # 括号不匹配，JSON 不完整，继续读取
+                        continue
+                        
+                except Exception as e:
+                    self.logger.debug(f"处理缓冲区时出错: {e}")
+                    continue
+                    
             except asyncio.TimeoutError:
                 continue  # 超时继续等待
             except Exception as e:
                 self.logger.info(f"读取数据异常: {e}")
                 break
 
-        # 超时处理
-        result = buffer.decode('utf-8')
-        self.logger.info(f"读取超时（字节数: {len(buffer)}）：{result}")
-        return result
-
+        # 超时或错误处理：尝试从缓冲区中提取任何可用的 JSON
+        self.logger.warning(f"读取超时，缓冲区大小: {len(buffer)} 字节")
+        try:
+            buffer_bytes = bytes(buffer)
+            json_start = buffer_bytes.find(b'{')
+            if json_start != -1:
+                # 尝试找到第一个完整的 JSON
+                brace_count = 0
+                for i in range(json_start, len(buffer_bytes)):
+                    byte = buffer_bytes[i:i+1]
+                    if byte == b'{':
+                        brace_count += 1
+                    elif byte == b'}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            json_bytes = buffer_bytes[json_start:i+1]
+                            try:
+                                json_str = json_bytes.decode('utf-8', errors='ignore')
+                                json.loads(json_str)
+                                self.logger.info(f"超时后成功提取 JSON")
+                                return json_str
+                            except:
+                                pass
+            
+            # 如果无法提取有效 JSON，返回清理后的字符串
+            clean_str = buffer_bytes.decode('utf-8', errors='ignore')
+            self.logger.warning(f"返回清理后的数据（可能不是有效 JSON）: {clean_str[:100]}...")
+            return clean_str
+        except Exception as e:
+            self.logger.error(f"最终处理失败: {e}")
+            return ""
     @staticmethod
     def _is_valid_json(json_str: str) -> bool:
         json_str = json_str.strip()
