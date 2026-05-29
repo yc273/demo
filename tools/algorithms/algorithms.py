@@ -9,6 +9,7 @@ from dataclasses import dataclass,field
 from typing import List, Tuple, Optional, Dict
 import asyncio
 from typing import Union
+import yaml
 
 from regex import F
 from sympy import false
@@ -88,19 +89,21 @@ class AlgorithmsApi:
         # self.offset1 = [-0.02, -0.09, -0.13, 0, 0, 0]#115-215
         # self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
 
-        self.offset = [0.02, -0.015]
+        self.offset = [+0.04, -0.05]
         # self.offset1 = [-0.02, 0.035, -0.1, 0, 0, 0]#焊钉专用
         # self.offset1 = [0.09, 0.02, -0.1, 0, 0, 0]#拧螺套专用
         # self.offset1 = [-0.09, -0.02, -0.1, 0, 0, 0]#焊钉专用
-        # self.offset1 = [0.08,0, -0.06, 0, 0, 0]
-        self.offset1 = [0,0, 0, 0, 0, 0]#0.327 0.341-fangban 0.21 0.15
+        # self.offset1 = [0,0, 0, 0, 0, 0]#fangban1 深度0.305 小车631.5 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
+        # self.offset1 = [0,0, 0, 0, 0, 0]#fangban3 深度0.305 小车1336 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
+        # self.offset1 = [0,-0.05, 0, 0, 0, 0]#
+        self.offset1 = [0.08,0, 0, 0, 0, 0]#
 
         self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
         #深度由200mm调整至270mm 49.7
         self.offset3 = [0,0,0,0,0,0]
         # self.offset4 = [0,0,0.12,0,0,0]#拧螺套专用
         self.offset4 = [0,0,0.18,0,0,0]#焊钉专用
-
+# 当前TCP位置结果: [-0.19572499999999998,-0.7623150000000001,0.956942,-1.5724718428768112,0.904272538750782,-3.13944589860984]
 
         # 获取当前文件所在目录
         self.current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -112,7 +115,7 @@ class AlgorithmsApi:
         elif self.brand == "ur":
             self.calib_data_path = os.path.join(self.config_dir, "calibration_data_ur.json")
         elif self.brand == "dazu":
-            self.calib_data_path = os.path.join(self.config_dir, "calibration_data_duco_dazu.json")
+            self.calib_data_path = os.path.join(self.config_dir, "calibration_data_duco_dazu.yaml")
         else:
             pass
 
@@ -168,27 +171,33 @@ class AlgorithmsApi:
     def load_calibration_data(self):
         """加载标定数据"""
         try:
-            with open(self.calib_data_path, 'r') as f:
-                all_data = json.load(f)
-                # 获取指定工具的数据
-                data = all_data.get(self.tool)
-                if not data:
-                    raise KeyError(f"未找到工具 '{self.tool}' 的校准数据")
-                # 解析矩阵数据
-                matrix_data = data['transform_matrix']
-                self.transform_matrix = Matrix3x3(
-                    matrix_data['m00'], matrix_data['m01'], matrix_data['m02'],
-                    matrix_data['m10'], matrix_data['m11'], matrix_data['m12'],
-                    matrix_data['m20'], matrix_data['m21'], matrix_data['m22']
-                )
-                self.home_position = data['home_position']
-                self.calib_depth = data['calib_depth']
-                self.calibration_z_axis = data.get('calibration_z_axis', [0.0, 0.0, 1.0])  # 添加默认值
-                self.is_positon_calibrated = True
-                self.is_depth_calibrated = True
-                self.is_angle_calibrated = data.get('is_angle_calibrated', False)  # 从文件读取角度标定状态
-                self.is_load_calibration_data = True
-                self.log("已加载历史标定数据")
+            if self.calib_data_path.endswith('.yaml') or self.calib_data_path.endswith('.yml'):
+                with open(self.calib_data_path, 'r', encoding='utf-8') as f:
+                    all_data = yaml.safe_load(f)
+            else:
+                with open(self.calib_data_path, 'r', encoding='utf-8') as f:
+                    all_data = json.load(f)
+            
+            # 获取指定工具的数据
+            data = all_data.get(self.tool)
+            if not data:
+                raise KeyError(f"未找到工具 '{self.tool}' 的校准数据")
+            
+            # 解析矩阵数据
+            matrix_data = data['transform_matrix']
+            self.transform_matrix = Matrix3x3(
+                matrix_data['m00'], matrix_data['m01'], matrix_data['m02'],
+                matrix_data['m10'], matrix_data['m11'], matrix_data['m12'],
+                matrix_data['m20'], matrix_data['m21'], matrix_data['m22']
+            )
+            self.home_position = data['home_position']
+            self.calib_depth = data['calib_depth']
+            self.calibration_z_axis = data.get('calibration_z_axis', [0.0, 0.0, 1.0])  # 添加默认值
+            self.is_positon_calibrated = True
+            self.is_depth_calibrated = True
+            self.is_angle_calibrated = data.get('is_angle_calibrated', False)  # 从文件读取角度标定状态
+            self.is_load_calibration_data = True
+            self.log("已加载历史标定数据")
         except Exception as e:
             self.log(f"加载标定数据失败: {str(e)} | 函数参数: {locals()}")
             self.is_positon_calibrated = False
@@ -204,8 +213,12 @@ class AlgorithmsApi:
             # 如果文件存在，先读取现有数据
             all_data = {}
             if os.path.exists(self.calib_data_path):
-                with open(self.calib_data_path, 'r') as f:
-                    all_data = json.load(f)
+                with open(self.calib_data_path, 'r', encoding='utf-8') as f:
+                    if self.calib_data_path.endswith('.yaml') or self.calib_data_path.endswith('.yml'):
+                        all_data = yaml.safe_load(f) or {}
+                    else:
+                        all_data = json.load(f)
+            
             # 准备当前工具的数据
             tool_data = {
                 'transform_matrix': {
@@ -228,12 +241,20 @@ class AlgorithmsApi:
             # 更新指定工具的数据
             all_data[self.tool] = tool_data
             
-            # 保存所有数据
-            with open(self.calib_data_path, 'w') as f:
-                json.dump(all_data, f, indent=4)
-            self.log(f"工具 '{self.tool}' 的标定数据已保存")
+            # 根据文件扩展名选择保存格式
+            if self.calib_data_path.endswith('.yaml') or self.calib_data_path.endswith('.yml'):
+                # 保存为 YAML 格式
+                with open(self.calib_data_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(all_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            else:
+                # 保存为 JSON 格式（保持向后兼容）
+                with open(self.calib_data_path, 'w', encoding='utf-8') as f:
+                    json.dump(all_data, f, indent=4, ensure_ascii=False)
+            
+            self.log(f"工具 '{self.tool}' 的标定数据已保存到: {self.calib_data_path}")
         except Exception as e:
             self.log(f"保存标定数据失败: {str(e)} | 函数参数: {locals()}")  
+ 
 #endregion
 
 #region 工具选择
@@ -312,7 +333,7 @@ class AlgorithmsApi:
                 0, 0, 0, 0
             ]
             print('is_position_adjusted_perfectly: offset_X:{}, offset_Y:{}'.format(abs(align_offset[0]), abs(align_offset[1])))
-            if abs(align_offset[0]) < 0.0008 and abs(align_offset[1]) < 0.0005:
+            if abs(align_offset[0]) < 0.0005 and abs(align_offset[1]) < 0.0005:
                 self.log(f"偏移量已小于阈值，无需移动")
                 return True
             else:

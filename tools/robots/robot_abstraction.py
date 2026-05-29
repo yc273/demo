@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Self,Tuple
 from enum import Enum
 import json
-from tools.io_modules.io_tools import io_controller
+from tools.io_modules.io_tools import io_controller # 直接导入已连接的全局实例
 
 from logs.logger_utils import logger
 from regex import T
@@ -1947,14 +1947,16 @@ class DaZuRobot(RobotAbstraction):
         #     timeout=10
         # )
         try:
-            # 默认测量偏移：当前位置、X+5cm、Y+5cm
+            # 默认测量偏移：5点十字形布局（中心 + 四周）
             if tcp_offsets is None:
                 tcp_offsets = [
-                    [0, 0, 0, 0, 0, 0],           # 位置1：原位
-                    [0.3, 0, 0, 0, 0, 0],       # 位置2：X+5cm
-                    [0, 0.3, 0, 0, 0, 0]        # 位置3：Y+5cm
-                ]
+                    [0, 0, 0, 0, 0, 0],           # 位置1：中心
+                    [0.2, 0, 0, 0, 0, 0],       # 位置2：X+5cm
+                    [-0.2, 0.2, 0, 0, 0, 0],      # 位置3：X-5cm
+                    [-0.2, -0.2, 0, 0, 0, 0],      # 位置5：Y-5cm
+                    [0.2, -0.2, 0, 0, 0, 0]        # 位置4：Y+5cm
 
+                ]
             # 记录初始位置
             start_pose = await self.get_current_tcp_pos()
             if start_pose is None:
@@ -1962,18 +1964,17 @@ class DaZuRobot(RobotAbstraction):
 
             logger.info(f"开始自动测量墙壁法向量，初始位置: {start_pose}")
 
-            # 存储3个测量点的数据
+            # 存储测量点的数据
             robot_poses = []
             distances = []
 
-            # 移动到3个测量点并采集数据
+            # 移动到测量点并采集数据
             for i, offset in enumerate(tcp_offsets):
-                logger.info(f"移动到测量点 {i+1}/3，偏移: {offset[:3]}")
+                logger.info(f"移动到测量点 {i+1}/{len(tcp_offsets)}，偏移: {offset[:3]}")
 
                 # 移动到测量点
                 if i > 0:  # 第一个点是当前位置，不需要移动
                     await self.movetcp(offset, acceleration=1, velocity=1)
-                await asyncio.sleep(1)
                 # 读取机器人位姿
                 current_pose = await self.get_current_tcp_pos()
                 if current_pose is None:
@@ -1983,6 +1984,9 @@ class DaZuRobot(RobotAbstraction):
                 # distance = input(f"请输入传感器距离（米）：")
                 # distance = float(distance)/1000+0.25
                 # logger.info(f"测量点{i+1}: 位姿={current_pose}, 距离={distance:.6f}m")
+                if not io_controller.is_connected:
+                    logger.warning("IO控制器未连接，请先调用 Io_connect_motor")
+                    return None, 0.0
                 distance = io_controller.get_laser_distance()
                 robot_poses.append(current_pose)
                 distances.append(distance)
@@ -2082,15 +2086,25 @@ class DaZuRobot(RobotAbstraction):
             return False, []
 
     def _calculate_wall_normal_from_measurements(self, robot_poses: List[List[float]], distances: List[float]) -> Tuple[List[float], float]:
-        """根据测量数据计算墙壁法向量"""
-        if len(robot_poses) != 3 or len(distances) != 3:
-            raise ValueError("需要3个测量点")
+        """
+        根据测量数据计算墙壁法向量（使用SVD最小二乘法拟合平面）
+
+        参数:
+            robot_poses: 机器人位姿列表（至少3个点）
+            distances: 传感器距离列表
+
+        返回:
+            wall_normal: 墙壁法向量 [nx, ny, nz]
+            angle: 机器人末端与墙壁夹角（度）
+        """
+        if len(robot_poses) < 3 or len(distances) < 3:
+            raise ValueError("至少需要3个测量点")
 
         wall_points = []
         robot_directions = []
 
-        # 计算3个墙面点
-        for i in range(3):
+        # 计算所有墙面点
+        for i in range(len(robot_poses)):
             x, y, z = robot_poses[i][0:3]
             rx, ry, rz = robot_poses[i][3:6]
 
@@ -2109,13 +2123,19 @@ class DaZuRobot(RobotAbstraction):
 
         wall_points = np.array(wall_points)
 
-        # 计算法向量（叉积）
-        v1 = wall_points[1] - wall_points[0]
-        v2 = wall_points[2] - wall_points[0]
-        wall_normal = np.cross(v1, v2)
+        # 使用SVD拟合平面（最小二乘法）
+        # 1. 中心化
+        centroid = np.mean(wall_points, axis=0)
+        points_centered = wall_points - centroid
+
+        # 2. SVD分解
+        _, _, Vt = np.linalg.svd(points_centered)
+
+        # 3. 最小奇异值对应的右奇异向量即为法向量
+        wall_normal = Vt[2, :]
 
         if np.linalg.norm(wall_normal) < 1e-10:
-            raise ValueError("三点共线，无法确定法向量")
+            raise ValueError("测量点共线，无法确定法向量")
 
         wall_normal_unit = wall_normal / np.linalg.norm(wall_normal)
 

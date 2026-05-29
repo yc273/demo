@@ -15,13 +15,14 @@ from .io_controller import IoController
 from .device_controllers import Liyou
 
 # Configuration
-IO_CONTROLLER_IP = "192.168.0.21"
+IO_CONTROLLER_IP = "192.168.50.21"
 IO_CONTROLLER_PORT = 8899
 CONNECT_TIMEOUT = 10
 
 # Global state
 io_controller: Optional[IoController] = None
 liyou_instance: Optional[Liyou] = None
+io_controller = IoController() # 全局实例
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,17 +37,17 @@ def register_io_tools(mcp: FastMCP):
     @mcp.tool()
     async def Io_connect_motor() -> bool:
         """连接到电机控制器
-        功能：连接电机控制器（默认IP：192.168.0.21:8899）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
+        功能：连接电机控制器（默认IP：192.168.50.21:8899）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
 
         # 获取现有IO控制器实例
         global io_controller
 
         # 若已连接，先关闭旧连接
         if io_controller is not None and getattr(io_controller, 'is_connected', False):
-            await io_controller.close()
+            return True  # 已连接，无需重复连接
 
         # 初始化控制器并连接（不使用async with，避免自动关闭）
-        io_controller = IoController()
+        # io_controller = IoController()
 
         # 带超时的连接
         try:

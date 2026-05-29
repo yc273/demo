@@ -23,17 +23,40 @@ try:
 
 except ImportError:
     sys.path.append(os.path.dirname(current_dir))
-    from io_modules.io_controller import IoController
+    from io_controller import IoController
+tools_dir = os.path.dirname(current_dir)
+project_root = os.path.dirname(tools_dir)
+for path in [tools_dir, project_root]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
-from logs.logger_utils import logger
+try:
+    from .io_controller import IoController
+except ImportError:
+    from io_controller import IoController
+
+try:
+    from ...logs.logger_utils import logger
+except ImportError:
+    try:
+        from logs.logger_utils import logger
+    except ImportError:
+        import logging
+        logger = logging.getLogger(__name__)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+
 class IoControllerGUI:
     """IO控制器GUI应用程序"""
 
-    # 模式配置
+    # 模式配置（包含设备IP）
     MODES = {
-        1: "运料小车",
-        2: "放料小车（机器人）",
-        3: "电梯"
+        1: {"name": "运料小车", "ip": "192.168.50.21"},
+        2: {"name": "放料小车（机器人）", "ip": "192.168.50.22"},
+        3: {"name": "电梯", "ip": "192.168.50.23"}
     }
 
     def __init__(self):
@@ -122,7 +145,7 @@ class IoControllerGUI:
 
         # 创建模式下拉框
         self.mode_var = tk.StringVar()
-        mode_options = [f"模式{mode} - {name}" for mode, name in self.MODES.items()]
+        mode_options = [f"模式{mode} - {info['name']}" for mode, info in self.MODES.items()]
         self.mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode_var,
                                      values=mode_options, state='readonly', width=20)
         self.mode_combo.pack(side='left', padx=5)
@@ -136,7 +159,7 @@ class IoControllerGUI:
         tk.Label(network_frame, text="IP地址:", bg='#f0f0f0').pack(side='left')
         self.ip_entry = tk.Entry(network_frame, width=15)
         self.ip_entry.pack(side='left', padx=5)
-        self.ip_entry.insert(0, "192.168.0.21")
+        self.ip_entry.insert(0, self.MODES[self.mode]["ip"])
 
         tk.Label(network_frame, text="端口:", bg='#f0f0f0').pack(side='left', padx=(10,0))
         self.port_entry = tk.Entry(network_frame, width=8)
@@ -172,7 +195,7 @@ class IoControllerGUI:
         self.connection_status.pack(side='left', padx=10)
 
         self.mode_status = tk.Label(status_info_frame,
-                                   text=f"设备模式: 模式{self.mode} - {self.MODES[self.mode]}",
+                                   text=f"设备模式: 模式{self.mode} - {self.MODES[self.mode]['name']}",
                                    bg='#f0f0f0', font=('微软雅黑', 9), fg='#3498db')
         self.mode_status.pack(side='left', padx=10)
 
@@ -183,6 +206,10 @@ class IoControllerGUI:
         self.position_status = tk.Label(status_info_frame, text="位置: 0.00",
                                        bg='#f0f0f0', font=('微软雅黑', 9))
         self.position_status.pack(side='left', padx=10)
+
+        self.laser_distance_status = tk.Label(status_info_frame, text="激光深度: 0.000 m",
+                                              bg='#f0f0f0', font=('微软雅黑', 9), fg='#e67e22')
+        self.laser_distance_status.pack(side='left', padx=10)
 
     def create_do1_frame(self, notebook):
         """创建DO1控制标签页"""
@@ -441,6 +468,7 @@ class IoControllerGUI:
         self.connection_status.config(text="连接状态: 未连接")
         self.motor_status.config(text="电机状态: 未知")
         self.position_status.config(text="位置: 0.00")
+        self.laser_distance_status.config(text="激光深度: 0.000 m")
 
     def on_connection_failed(self):
         """连接失败的UI更新"""
@@ -457,14 +485,19 @@ class IoControllerGUI:
         """模式改变时的回调函数"""
         selected_text = self.mode_var.get()
         # 从选择的文本中提取模式编号
-        for mode_num, mode_name in self.MODES.items():
-            if f"模式{mode_num} - {mode_name}" == selected_text:
+        for mode_num, mode_info in self.MODES.items():
+            if f"模式{mode_num} - {mode_info['name']}" == selected_text:
                 if self.mode != mode_num:
                     self.mode = mode_num
+                    # 更新IP地址为新模式的IP
+                    new_ip = self.MODES[self.mode]["ip"]
+                    self.ip_entry.delete(0, tk.END)
+                    self.ip_entry.insert(0, new_ip)
+
                     # 如果已经连接，提示用户重新连接
                     if self.is_controller_connected():
                         response = messagebox.askyesno("模式切换",
-                            f"已切换到{mode_name}模式。\n\n是否重新连接以应用新模式？")
+                            f"已切换到{mode_info['name']}模式（IP: {new_ip}）。\n\n是否重新连接以应用新模式？")
                         if response:
                             # 断开当前连接
                             self.run_async(self.disconnect_device())
@@ -475,7 +508,7 @@ class IoControllerGUI:
     def update_mode_display(self):
         """更新模式显示信息"""
         if hasattr(self, 'mode_status'):
-            self.mode_status.config(text=f"设备模式: 模式{self.mode} - {self.MODES[self.mode]}")
+            self.mode_status.config(text=f"设备模式: 模式{self.mode} - {self.MODES[self.mode]['name']}")
 
     def start_status_monitoring(self):
         """启动状态监控"""
@@ -488,12 +521,13 @@ class IoControllerGUI:
                             position = controller.get_motor_absolute_position()
                             do1_states = controller.get_do1_states()
                             do2_states = controller.get_do2_states()
-                            return motor_state, position, do1_states, do2_states
+                            laser_distance = controller.get_laser_distance()
+                            return motor_state, position, do1_states, do2_states, laser_distance
 
-                        motor_state, position, do1_states, do2_states = self.with_controller(get_status)
+                        motor_state, position, do1_states, do2_states, laser_distance = self.with_controller(get_status)
 
                         self.update_ui_safely(lambda: self.update_status_display(
-                            motor_state, position, do1_states, do2_states))
+                            motor_state, position, do1_states, do2_states, laser_distance))
 
                     except Exception as e:
                         logger.error(f"状态监控错误: {e}")
@@ -503,7 +537,7 @@ class IoControllerGUI:
         monitor_thread = threading.Thread(target=monitor, daemon=True)
         monitor_thread.start()
 
-    def update_status_display(self, motor_state, position, do1_states, do2_states):
+    def update_status_display(self, motor_state, position, do1_states, do2_states, laser_distance):
         """更新状态显示"""
         # 更新电机状态
         motor_text = "开启" if motor_state == 1 else "关闭"
@@ -513,6 +547,9 @@ class IoControllerGUI:
         # 更新位置
         self.position_status.config(text=f"位置: {position:.2f}")
         self.current_position_label.config(text=f"当前位置: {position:.2f}")
+
+        # 更新激光深度
+        self.laser_distance_status.config(text=f"激光深度: {laser_distance:.3f} m")
 
         # 更新DO1按钮状态
         for i, state in enumerate(do1_states):
@@ -535,6 +572,15 @@ class IoControllerGUI:
         if not self.is_controller_connected():
             messagebox.showwarning("警告", "请先连接设备")
             return
+
+        # 对DO1[0]和DO1[3]进行快换操作确认
+        if index in [0, 3]:
+            confirm = messagebox.askyesno(
+                "快换操作确认",
+                "⚠️ 现在进行快换操作，请确认！\n\n是否继续执行？"
+            )
+            if not confirm:
+                return  # 用户取消操作
 
         try:
             def toggle_operation(controller):

@@ -433,16 +433,19 @@ def register_robot_tools(mcp: FastMCP):
             return error_msg
     #endregion
     @mcp.tool()
-    async def Rob_jugle_adjust(tcp_offsets: List[float]) -> bool:
+    async def Rob_jugle_adjust(tcp_offsets: List[List[float]]=None) -> bool:
         """
-        机器人杂耍调整，依次移动到多个位置
+        机器人角度调整，依次移动到多个位置
         :param offsets: 位置偏移列表，每个元素为6元位姿偏移 [dx, dy, dz, drx, dry, drz]，单位：m，rad
         :return: 调整结果
-        功能：机器人杂耍调整，依次移动到多个位置；触发词：机器人杂耍调整、连续位置调整、路径点调整；参数：需提供位置偏移列表，每个元素为6元位姿偏移（[dx, dy, dz, drx, dry, drz]）
+        功能：机器人角度调整，依次移动到多个位置；触发词：机器人角度调整、连续位置调整、路径点调整；参数：需提供位置偏移列表，每个元素为6元位姿偏移（[dx, dy, dz, drx, dry, drz]）
         """
-        wall_normal, angle = await robot_controller.robot.auto_measure_wall_normal(
+        if tcp_offsets is None:
+            wall_normal, angle = await robot_controller.robot.auto_measure_wall_normal()
+        else:
+            wall_normal, angle = await robot_controller.robot.auto_measure_wall_normal(
             tcp_offsets=tcp_offsets  # 使用指定偏移
-        )
+        )            
         success, final_pose = await robot_controller.robot.adjust_to_wall(
             wall_normal=wall_normal,  # 使用测量得到的法向量
             mode="perpendicular",      # Z轴垂直墙面

@@ -5,14 +5,23 @@ import threading
 import time
 import queue
 from collections import deque
-import sys
-import os
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+
+
 # from cv2 import log
-from logs.logger_utils import logger
+# 支持多种导入方式
+try:
+    from ...logs.logger_utils import logger
+except ImportError:
+    try:
+        from logs.logger_utils import logger
+    except ImportError:
+        import logging
+        logger = logging.getLogger(__name__)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
 
 class ThreadedHeartbeatManager:
     """线程化的心跳包管理器 - Linus式简洁设计"""
@@ -150,7 +159,7 @@ class TcpClient:
         self._packet_received_callback = callback
 
     # async def connect_async(self, ip: str = "10.10.100.254", port: int = 2317, timeout: float = 10.0) -> None:
-    async def connect_async(self, ip: str = "192.168.0.21", port: int = 8899, timeout: float = 10.0) -> None:
+    async def connect_async(self, ip: str = "192.168.50.21", port: int = 8899, timeout: float = 10.0) -> None:
         """异步连接到指定服务器，带超时参数"""
         if self._is_connected:
             await self.disconnect_async()
@@ -385,7 +394,7 @@ class IoController:
         self._di_motor_command = self.int_to_byte(state)
 
 # 在IoController类的connect_async方法中添加状态同步逻辑
-    async def ping_device(self, ip: str = "192.168.0.21", port: int = 8899, timeout: float = 3.0) -> bool:
+    async def ping_device(self, ip: str = "192.168.50.21", port: int = 8899, timeout: float = 3.0) -> bool:
         """在连接前ping设备以检查是否可达"""
         try:
             # 尝试建立一个连接来测试设备可达性
@@ -402,14 +411,12 @@ class IoController:
             logger.warning(f"设备 {ip}:{port} 不可达: {str(e)}")
             return False
 
-    async def connect_async(self, ip: str = "192.168.0.21", port: int = 8899, timeout: float = 10.0) -> None:
+    async def connect_async(self, ip: str = "192.168.50.21", port: int = 8899, timeout: float = 10.0) -> None:
         self._throw_if_disposed()
 
-        # 移除多余的ping检查，直接尝试连接
-        # 连接本身就能验证设备可达性，ping反而制造TIME_WAIT问题
 
         # 尝试连接，如果失败则重试
-        max_retries = 10
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 await self._tcp_client.connect_async(ip, port, timeout)
@@ -423,7 +430,7 @@ class IoController:
                         self._heartbeat_manager.send_command_async(heartbeat_data)
                     
                     # 等待设备发送状态数据（最多等待1.5秒）
-                    for _ in range(30):  # 30次重试，每次间隔50ms
+                    for _ in range(10):  # 30次重试，每次间隔50ms
                         # 检查是否接收到有效的设备数据
                         if (hasattr(self, '_last_received_time') and 
                             self._last_received_time is not None):
@@ -431,7 +438,7 @@ class IoController:
                             if time.time() - self._last_received_time < 1.5:  # 1.5秒内接收到数据
                                 logger.info("成功接收到设备状态数据，连接正常")
                                 return  # 成功连接，直接返回
-                        await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.1)
                     else:
                         logger.warning(f"第{attempt + 1}次连接：建立成功，但未能在预期时间内接收到设备状态数据")
                         # 如果连接建立但没有收到数据，尝试断开并重连
@@ -494,6 +501,7 @@ class IoController:
         # 更新最后接收时间
         import time
         self._last_received_time = time.time()
+        # logger.info(f"接收到数据: {buffer.hex()} 长度: {length}")
         # 新增：首先识别3字节ACK确认帧 [0xF4][0x02][0x02]
         if length == 3 and buffer[0] == 0xF4 and buffer[1] == 0x02 and buffer[2] == 0x02:
             logger.info("收到ACK确认帧 [0xF4][0x02][0x02]")
@@ -561,7 +569,7 @@ class IoController:
         # DI电机状态
         self._di_motor_state = buffer[4]
         self._di_motor_command = self._di_motor_state
-
+        # logger.info(f"DI电机状态: {self._di_motor_state}")
         # 电机绝对位置(4字节float)
         motor_bytes = buffer[5:9]
         # logger.info(f"电机绝对位置: {motor_bytes}")
