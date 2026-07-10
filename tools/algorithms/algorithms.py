@@ -95,8 +95,8 @@ class AlgorithmsApi:
         # self.offset1 = [-0.09, -0.02, -0.1, 0, 0, 0]#焊钉专用
         # self.offset1 = [0,0, 0, 0, 0, 0]#fangban1 深度0.305 小车631.5 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
         # self.offset1 = [0,0, 0, 0, 0, 0]#fangban3 深度0.305 小车1336 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
-        # self.offset1 = [0,-0.05, 0, 0, 0, 0]#
-        self.offset1 = [0.08,0, 0, 0, 0, 0]#
+        # self.offset1 = [0,-0.05, 0, 0, 0, 0]#拧螺套
+        self.offset1 = [0.08,0, 0, 0, 0, 0]#焊枪、u型件  
 
         self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
         #深度由200mm调整至270mm 49.7

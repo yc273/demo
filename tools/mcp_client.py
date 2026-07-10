@@ -22,7 +22,7 @@ from mcp.client.stdio import stdio_client
 from fuzzywuzzy import fuzz
 from regex import F, T
 from sympy import false, true
-
+import math
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  
 sys.path.append(root_path)
 from logs.logger_utils import logger, logger2
@@ -2206,8 +2206,8 @@ class MCPClient:
 
 
                 # current_pos[5] = 4.061032103540406
-                # current_pos[5] = 4.065465239840471
                 current_pos[5] = 0
+                
             except json.JSONDecodeError:
                 print("解析关节位置数据失败")
                 return False
@@ -3843,7 +3843,254 @@ class MCPClient:
         set_payload_text = set_payload_result.content[0].text if set_payload_result.content else "设置失败"
         print(f"设置负载结果: {set_payload_text}")
         return True    
+#endregion
+# region 获取当前工具
+    async def config_named_tcp(self, name: str, offset: List[float]):
+        """
+        配置命名TCP
+        """
+        # input_name = input("请输入工具名称: ").strip()
+        # name = input_name
+        print(f"配置TCP: {name}")
+        tcp_result = await self.session.call_tool("Rob_set_tcp", {"tcp_offset": offset, "tcp_name": name})
+        tool_text = tcp_result.content[0].text if tcp_result.content else "获取失败"
+
+        print(f"当前工具结果: {tool_text}")
+    #region 平滑对齐并移动
+    async def smooth_align_and_move(
+        self,
+        target_rx: float,
+        target_ry: float,
+        target_rz: float,
+        z_distance_mm: float,
+        velocity: float = 0.01,
+        acceleration: float = 0.01,
+        steps: int = 5
+    ) -> bool:
+        """
+        平滑对齐姿态并沿TCP坐标系Z轴前进
+
+        :param target_rx: 目标姿态X轴旋转角度（弧度）
+        :param target_ry: 目标姿态Y轴旋转角度（弧度）
+        :param target_rz: 目标姿态Z轴旋转角度（弧度）
+        :param z_distance_mm: Z轴前进距离（毫米）
+        :param velocity: 前进速度（米/秒），默认0.01（10mm/s）
+        :param acceleration: 加速度（米/秒²），默认0.02
+        :param steps: 插值步数，默认20（越多越平滑）
+        :return: True表示执行成功
+
+        功能说明：
+            1. 适用于小角度调整（<10度），使用线性插值
+            2. 姿态对齐和Z轴前进同步执行，分多步完成
+            3. 每步同时调整姿态和位置，确保运动平滑
+            4. TCP坐标系：Z轴为工具前进方向，X轴向左，Y轴向上
+        """
+        global robot_connected 
+        
+        print("=== 平滑对齐并移动 ===")
+        
+        try:
+            # 确保机器人已连接
+            if not robot_connected:
+                print("机器人未连接，无法执行")
+                return False
+
+            if steps < 1:
+                print("步数必须大于等于1")
+                return False
+
+            # 1. 获取当前位姿
+            print("获取当前TCP位置...")
+            current_pos_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
+            
+            if "失败" in current_pos_text or not current_pos_text:
+                print("无法获取当前位姿")
+                return False
+
+            # 解析当前位置
+            import json
+            try:
+                current_pose = json.loads(current_pos_text)
+            except json.JSONDecodeError:
+                print("解析位置数据失败")
+                return False
+            if current_pose[5]*target_rz<0:
+                if target_rz > current_pose[5]:
+                    target_rz = target_rz - 2*math.pi
+                else:
+                    target_rz = target_rz + 2*math.pi
+            # 2. 计算姿态差值
+            drx = target_rx - current_pose[3]
+            dry = target_ry - current_pose[4]
+            drz = target_rz - current_pose[5]
+
+            # 转换距离到米
+            z_distance = z_distance_mm / 1000.0
+
+            # 3. 计算每步的增量
+            step_drx = drx / steps
+            step_dry = dry / steps
+            step_drz = drz / steps
+            step_z = z_distance / steps
+
+            print(f"当前姿态: [{current_pose[3]:.4f}, {current_pose[4]:.4f}, {current_pose[5]:.4f}]")
+            print(f"目标姿态: [{target_rx:.4f}, {target_ry:.4f}, {target_rz:.4f}]")
+            print(f"姿态差值: [{drx:.4f}, {dry:.4f}, {drz:.4f}]")
+            print(f"Z轴距离: {z_distance_mm}mm, 分{steps}步完成")
+            print(f"每步增量: 姿态[{step_drx:.4f}, {step_dry:.4f}, {step_drz:.4f}], 位置{step_z*1000:.2f}mm")
+
+            # 4. 分步执行同步调整
+            for i in range(steps):
+
+                current_pos_result1 = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+                current_pos_text1 = current_pos_result1.content[0].text if current_pos_result1.content else "获取失败"
+                print(f"当前TCP位置结果: {current_pos_text1}")
+
+                if "失败" in current_pos_text1 or not current_pos_text1:
+                    print("无法获取当前位姿")
+                    return False
+
+                # 解析当前位置
+                import json
+                try:
+                    current_pose1 = json.loads(current_pos_text1)
+                except json.JSONDecodeError:
+                    print("解析位置数据失败")
+                    return False
+                # offset = [0, 0, 0, step_drx, step_dry, step_drz]
+                current_pose1[3]+= step_drx
+                current_pose1[4]+= step_dry
+                current_pose1[5]+= step_drz
+                offset = [current_pose1[0], current_pose1[1], current_pose1[2], current_pose1[3], current_pose1[4], current_pose1[5]]
+                print(f"执行第{i+1}/{steps}步: offset=[{offset[0]:.3f}, {offset[1]:.3f}, {offset[2]:.3f}, {offset[3]:.4f}, {offset[4]:.4f}, {offset[5]:.4f}]")
+
+                move_result = await self.session.call_tool("Rob_movel", {
+                    "tcp_pose": offset,
+                    "acceleration": acceleration,
+                    "velocity": velocity
+                })
+                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+                
+                if "失败" in move_result_text:
+                    print(f"第{i+1}步移动失败: {move_result_text}")
+                    return False
+                
+                # 等待每一步完成
+                await asyncio.sleep(0.1)
+                offset = [0, 0, step_z, 0,0,0]
+
+                move_result = await self.session.call_tool("Rob_movetcp", {
+                    "offset": offset,
+                    "acceleration": acceleration,
+                    "velocity": velocity
+                })
+                move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+
+            # 5. 验证最终位姿
+            final_pos_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            final_pos_text = final_pos_result.content[0].text if final_pos_result.content else "获取失败"
+            
+            if "失败" not in final_pos_text and final_pos_text:
+                try:
+                    final_pose = json.loads(final_pos_text)
+                    print(f"=== 完成平滑对齐并移动 ===")
+                    print(f"最终姿态: [{final_pose[3]:.4f}, {final_pose[4]:.4f}, {final_pose[5]:.4f}]")
+                    print(f"最终位置: [{final_pose[0]:.4f}, {final_pose[1]:.4f}, {final_pose[2]:.4f}]")
+                except json.JSONDecodeError:
+                    print("无法解析最终位姿")
+            else:
+                print("无法获取最终位姿")
+
+            return True
+
+        except Exception as e:
+            print(f"平滑对齐并移动时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    #endregion
+    #region 平滑对齐并移动
+    async def smooth_align_and_move2(
+        self,
+        target_rx: float,
+        target_ry: float,
+        target_rz: float,
+        z_distance_mm: float,
+        velocity: float = 0.01,
+        acceleration: float = 0.01
+        ) -> bool:
+        """
+        平滑对齐并移动
+        :param target_rx: 目标旋转轴X轴角度，单位：rad
+        :param target_ry: 目标旋转轴Y轴角度，单位：rad
+        :param target_rz: 目标旋转轴Z轴角度，单位：rad
+        :param z_distance_mm: Z轴距离，单位：mm
+        :param velocity: 移动速度，单位：mm/s
+        """
+        global robot_connected 
+        
+        print("=== 平滑对齐并移动 ===")
+        
+        try:
+            # 确保机器人已连接
+            if not robot_connected:
+                print("机器人未连接，无法执行")
+                return False
+
+
+            # 1. 获取当前位姿
+            print("获取当前TCP位置...")
+            current_pos_result = await self.session.call_tool("Rob_get_current_tcp_pos", {})
+            current_pos_text = current_pos_result.content[0].text if current_pos_result.content else "获取失败"
+            
+            if "失败" in current_pos_text or not current_pos_text:
+                print("无法获取当前位姿")
+                return False
+
+            # 解析当前位置
+            import json
+            try:
+                current_pose = json.loads(current_pos_text)
+            except json.JSONDecodeError:
+                print("解析位置数据失败")
+                return False
+            if abs(current_pose[5]-target_rz)>math.pi:
+                if target_rz > current_pose[5]:
+                    target_rz = target_rz - 2*math.pi
+                else:
+                    target_rz = target_rz + 2*math.pi
+            # 2. 计算目标姿态
+            current_pose[3] = target_rx
+            current_pose[4] = target_ry
+            current_pose[5] = target_rz
+            # 转换距离到米
+            z_distance = z_distance_mm / 1000.0
+            offset = [0,0,z_distance,0,0,0]
+            print(f"目标姿态: [{target_rx:.4f}, {target_ry:.4f}, {target_rz:.4f}]")
+            print(f"Z轴距离: {z_distance_mm}mm")
+            move_result = await self.session.call_tool("Rob_movetcp_to", {
+                "current_pos": current_pose,
+                "offset":offset,
+                "acceleration": acceleration,
+                "velocity": velocity
+            })
+            move_result_text = move_result.content[0].text if move_result.content else "移动失败"
+            return True
+        except Exception as e:
+            print(f"平滑对齐并移动时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 #endgion
+#region 获取六角螺套点
+    async def get_screw_count(self):
+        print("获取螺钉数量...")
+        normal_vector_result = await self.session.call_tool("Cam_get_screw_count", {})
+        normal_vector_text = normal_vector_result.content[0].text if normal_vector_result.content else "获取失败"
+        print(f"获取螺钉数量结果: {normal_vector_text}")
+        return 
     #region 交互菜单
     async def interactive_menu(self):
         """
@@ -3867,19 +4114,20 @@ class MCPClient:
             print("\n")
             print("22.测试位置              23.移动到焊钉位      24.上下左右移动")
             print("\n")
-            print("25.电机工具开关          26.位置标定         27.位置调整   28.获取十字交叉点 ")
+            print("25.电机工具开关          26.位置标定         27.位置调整     28.获取十字交叉点 ")
             print("\n")
             print("29.关节移动              30.移动到保存的关节位姿        31.十字线调整全流程  ")
             print("\n")
-            print("32.板角度调整            33.板中心调整        34.板中心标定  ")
+            print("32.板角度调整            33.板中心调整       34.板中心标定  ")
             print("\n")
-            print("35.获取六角螺套点        36.U型件标定         37.U型件调整 ")
+            print("35.获取六角螺套点        36.U型件标定        37.U型件调整 ")
             print("\n")
             print("38.连接电机             39.获取深度          40.放板位置调整   41.板角度调平")
             print("\n")
-            print("42.获取机器人当前tcp位置  43.获取机器人当前角度位置  44.设置负载  0.退出")
+            print("42.获取机器人当前tcp位置  43.获取机器人当前角度位置  44.设置负载 ")
             print("\n")
-
+            print("45.平滑对齐并移动        46.检测螺钉数量      0.退出")
+            print("\n")
             choice = input("请选择操作: ").strip()
             
             if choice == "1":
@@ -3994,6 +4242,12 @@ class MCPClient:
                 await self.get_current_joint_position()
             elif choice == "44":
                 await self.set_payload()
+            elif choice == "45":
+                await self.smooth_align_and_move2(-1.5495731230906455,0.9266476597613494,-3.120404356470582,70)
+            elif choice == "46":
+                await self.get_screw_count()[-0.228866,-0.725795,0.937359,-2.498037398501924,0.8703258847994925,0.11023499555596183]
+            elif choice == "47":
+                await self.config_named_tcp("tcp_10",[0,0,100,0,0,0])
             elif choice == "0":
                 print("退出程序")
                 break

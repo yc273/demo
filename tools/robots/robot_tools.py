@@ -221,6 +221,32 @@ def register_robot_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"机器人移动失败：{e}")
             return f"机器人移动失败：{e}"
+        
+
+    @mcp.tool()
+    async def Rob_movetcp_to(current_pos: List[float], offset: List[float], acceleration: float = 0.2, velocity: float = 0.2) -> str:
+        """
+        控制机器人按TCP位置直线移动，非阻塞
+        :param current_pos: 6元当前位置列表 [x, y, z, rx, ry, rz]，单位：m，rad
+        :param offset: 工具坐标系偏移量，6元位姿列表[dx, dy, dz， drx, dry, drz]，单位：m，rad
+        :param acceleration: 加速度，默认0.1
+        """
+
+
+        if not robot_controller.is_connected():
+            return "机器人未连接"
+        
+        if len(current_pos) != 6:
+            return f"当前位置列表长度必须为6，当前长度: {len(current_pos)}"
+        
+        try:
+            success = await robot_controller.robot.movetcp_to(current_pos, offset, acceleration, velocity)
+            if success:
+                return f"机器人TCP移动完成，目标位置: {["{:.4f}".format(x) for x in current_pos]}"
+        except Exception as e:
+            logger.error(f"机器人TCP移动失败：{e}")
+            return f"机器人TCP移动失败：{e}"
+
     #region 位置信息工具
     @mcp.tool()
     async def Rob_get_current_tcp_pos():
@@ -269,30 +295,22 @@ def register_robot_tools(mcp: FastMCP):
 
     #region TCP设置工具
     @mcp.tool()
-    async def Rob_set_tcp(tcp: List[float]) -> str:
+    async def Rob_set_tcp(tcp_offset: List[float],tcp_name: str="TCP_tmp") -> str:
         """
-        临时设置TCP偏移信息，单位：m，rad
-        :param tcp: TCP位置 [x, y, z, rx, ry, rz]
-        :return: 设置结果
-        功能：设置TCP坐标系原点位置；触发词：设置工具坐标、定义工具末端、TCP设置；参数：需提供TCP位置（[x,y,z,rx,ry,rz]）
+        保存机器人tcp偏移信息
+        :param tcp_name: 工具名称
+        :param tcp_offset: 工具坐标系偏移量 [dx, dy, dz, drx, dry, drz]
+        :return: 执行结果
+        功能：保存机器人工具坐标系偏移信息；触发词：保存tcp偏置方案'
         """
         if not robot_controller.is_connected():
             return "机器人未连接"
         
-        if len(tcp) != 6:
-            return f"TCP位置列表长度必须为6，当前长度: {len(tcp)}"
+        if len(tcp_offset) != 6:
+            return f"TCP偏移列表长度必须为6，当前长度: {len(tcp_offset)}"
         
-        try:
-            success = await robot_controller.robot.set_tool(tcp)
-            if success:
-                return f"机器人TCP坐标设置为: {tcp}"
-            else:
-                return "机器人设置TCP坐标失败"
-        except Exception as e:
-            error_msg = f"机器人设置TCP坐标失败: {str(e)}"
-            logger.error(error_msg)
-            return error_msg
-        
+        success = await robot_controller.robot.set_tool(tcp_offset, name=tcp_name)
+        return f"工具 '{tcp_name}' 配置结果: {'成功' if success else '失败'}"
     @mcp.tool()
     async def Rob_choose_tcp_offset(tcp_name: str) -> str:
         """

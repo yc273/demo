@@ -86,7 +86,7 @@ class RobotAbstraction(ABC):
         pass
     
     @abstractmethod
-    async def set_tool(self, tcp: List[float]) -> bool:
+    async def set_tool(self, tcp: List[float], name: str="TCP_tmp") -> bool:
         """设置TCP"""
         pass
     
@@ -1252,7 +1252,8 @@ class DaZuRobot(RobotAbstraction):
             [0.0, 0.0, 1.0]
         ]  # 3x3旋转矩阵
 
-     
+        self.active_tcp_name = "TCP"
+
      
     async def Isconnect(self) -> bool:
         """判断是否连接"""
@@ -1433,7 +1434,7 @@ class DaZuRobot(RobotAbstraction):
             await self.set_speed_ratio(100)  # 设置默认速度为100%
             #自定义默认关节角度位置
             joint=[0,0,0,0,0,0]   
-            sTcpName ="TCP"
+            sTcpName = self.active_tcp_name
             sUcsName = "Base"
             velocity = velocity*1000
             acceleration = acceleration*1000
@@ -1765,20 +1766,38 @@ class DaZuRobot(RobotAbstraction):
             logger.error(e)
             return None
 
-    async def set_tool(self, tcp: List[float]) -> bool:
-        """设置大族机器人TCP"""
-        if not await self.Isconnect() or self.state == RobotState.DISCONNECTED:
-            return False
+    # async def set_tool(self, tcp: List[float]) -> bool:
+    #     """设置大族机器人TCP"""
+    #     if not await self.Isconnect() or self.state == RobotState.DISCONNECTED:
+    #         return False
         
-        try:
-            nRet = self.cps.HRIF_SetTCP(0,0,tcp)
-            if nRet != 0:
-                raise Exception("设置tcp失败")
-            return True
-        except Exception as e:
-            logger.error(e)
-            return False
-     
+    #     try:
+    #         nRet = self.cps.HRIF_SetTCP(0,0,tcp)
+    #         if nRet != 0:
+    #             raise Exception("设置tcp失败")
+    #         print("11")
+    #         return True
+    #     except Exception as e:
+    #         logger.error(e)
+    #         return False
+    async def set_tool(self, offset: List[float], name: str="TCP_tmp") -> bool:
+        """
+        设置大族机器人TCP
+
+        Args:
+            offset: 6 维 TCP 偏置 [x,y,z,rx,ry,rz]，单位 m/rad。
+            name: 工具坐标系名称，如 "TCP_tmp"。
+        """
+        n_ret = self.cps.HRIF_ConfigTCP(0, name, offset)#创建工具tcp偏移
+        if n_ret != 0:
+            raise RuntimeError(f"HRIF_ConfigTCP({name}) 失败，错误代码: {n_ret}")
+        await asyncio.sleep(0.5)
+        n_ret = self.cps.HRIF_SetTCPByName(0, 0, name)#选择工具偏移系
+        if n_ret != 0:
+            raise RuntimeError(f"HRIF_SetTCPByName({name}) 失败，错误代码: {n_ret}")
+        self.active_tcp_name = name
+        return True
+
     #mass 负载(kg)        cog :dX ,dY ,dZ  (质心朝x轴的偏移量)(mm)
     async def set_payload(self, mass: float, cog: List[float]) -> bool:
         """设置大族机器人负载"""
@@ -1786,7 +1805,6 @@ class DaZuRobot(RobotAbstraction):
             return False
         
         try:   
-            
             # 定义负载参数
             dX = cog[0]  # 负载质心X坐标
             dY = cog[1]  # 负载质心Y坐标
@@ -2276,7 +2294,7 @@ class RobotFactory:
         elif brand == RobotBrand.DUCOCOBOT:
             return DucocobotRobot("192.168.0.6", **kwargs)
         elif brand == RobotBrand.DAZU:
-            return DaZuRobot("192.168.0.10", **kwargs)
+            return DaZuRobot("192.168.50.10", **kwargs)
             pass
         elif brand == RobotBrand.KUKA:
             raise NotImplementedError("KUKA 机器人尚未实现")

@@ -7,7 +7,7 @@ MCP服务器工具，提供视觉检测功能
 import asyncio
 import sys, os
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple,Dict, Any
 
 from fastmcp import FastMCP
 
@@ -262,3 +262,27 @@ def register_vision_tools(mcp: FastMCP):
             error_msg = f"检测表面角度时出错: {str(e)}"
             logger.error(error_msg)
             return error_msg
+#region 螺钉数量统计
+    @mcp.tool()
+    async def Cam_get_screw_count() -> Dict[str, int]:
+        """
+        获取视觉系统检测到的螺钉数量
+
+        该工具用于获取当前视野中检测到的螺钉数量统计。
+        可用于自动化装配任务中的数量确认和流程控制。
+        需要先连接视觉服务器才能使用此工具。
+
+        :return: 包含螺钉数量的结构化数据
+                格式: {"count": N}
+                如果获取失败则返回 {"count": 0}
+        """
+        global vision_api
+        if vision_api is None or not getattr(vision_api, 'is_connected', False):
+            raise Exception(f"视觉工具执行失败: 未连接到视觉服务器，请先连接")
+
+        screw_count = await vision_api.get_screw_count_async()
+
+        return {"count": screw_count}
+
+
+
