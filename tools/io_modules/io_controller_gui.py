@@ -54,9 +54,9 @@ class IoControllerGUI:
 
     # 模式配置（包含设备IP）
     MODES = {
-        1: {"name": "运料小车", "ip": "192.168.50.21"},
-        2: {"name": "放料小车（机器人）", "ip": "192.168.50.22"},
-        3: {"name": "电梯", "ip": "192.168.50.23"}
+        1: {"name": "运料小车", "ip": "192.168.3.21"},
+        2: {"name": "放料小车（机器人）", "ip": "192.168.3.22"},
+        3: {"name": "电梯", "ip": "192.168.3.23"}
     }
 
     def __init__(self):
@@ -574,7 +574,7 @@ class IoControllerGUI:
             return
 
         # 对DO1[0]和DO1[3]进行快换操作确认
-        if index in [0, 3]:
+        if index ==7:
             confirm = messagebox.askyesno(
                 "快换操作确认",
                 "⚠️ 现在进行快换操作，请确认！\n\n是否继续执行？"

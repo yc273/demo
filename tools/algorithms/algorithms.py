@@ -89,14 +89,14 @@ class AlgorithmsApi:
         # self.offset1 = [-0.02, -0.09, -0.13, 0, 0, 0]#115-215
         # self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
 
-        self.offset = [+0.04, -0.05]
+        self.offset = [-0.02,-0.01]
         # self.offset1 = [-0.02, 0.035, -0.1, 0, 0, 0]#焊钉专用
         # self.offset1 = [0.09, 0.02, -0.1, 0, 0, 0]#拧螺套专用
         # self.offset1 = [-0.09, -0.02, -0.1, 0, 0, 0]#焊钉专用
-        # self.offset1 = [0,0, 0, 0, 0, 0]#fangban1 深度0.305 小车631.5 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
+        self.offset1 = [0,0, 0, 0, 0, 0]#fangban1 深度0.305 小车631.5 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
         # self.offset1 = [0,0, 0, 0, 0, 0]#fangban3 深度0.305 小车1336 xipan1 0.348  #fangban2 深度0.305 小车631.5 xipan2 0.36 
         # self.offset1 = [0,-0.05, 0, 0, 0, 0]#拧螺套
-        self.offset1 = [0.08,0, 0, 0, 0, 0]#焊枪、u型件  
+        # self.offset1 = [0.06,-0.06, 0, 0, 0, 0]#焊枪、u型件  -0.073 0.052
 
         self.offset2 = [self.offset[0], self.offset[1], 0, 0, 0, 0]
         #深度由200mm调整至270mm 49.7
@@ -367,8 +367,8 @@ class AlgorithmsApi:
             # 计算转换矩阵
             self.calculate_full_transform_matrix()
             # 记录原点位置
-            self.home_position = third_robot_point
-            self.log(f"初始原点已记录：X={self.home_position[0]}, Y={self.home_position[1]}, Z={self.home_position[2]}")
+            self.home_position = second_image_point
+            self.log(f"初始原点已记录：X={self.home_position[0]}, Y={self.home_position[1]}")
             # 标定完成
             self.is_positon_calibrated = True
             self.save_calibration_data()
@@ -405,8 +405,8 @@ class AlgorithmsApi:
             # 计算转换矩阵
             self.calculate_full_transform_matrix()
             # 记录原点位置
-            self.home_position = third_robot_point
-            self.log(f"初始原点已记录：X={self.home_position[0]}, Y={self.home_position[1]}, Z={self.home_position[2]}")
+            self.home_position = second_image_point
+            self.log(f"初始原点已记录：X={self.home_position[0]}, Y={self.home_position[1]}")
             # 标定完成
             self.is_positon_calibrated = True
             self.save_calibration_data()

@@ -151,7 +151,7 @@ class VisionApi:
             self.port = port
         else:
             # 默认值
-            self.ip = "127.0.0.1"
+            self.ip = "192.168.3.198"
             self.port = 65432
 
         self.client: Optional[socket.socket] = None

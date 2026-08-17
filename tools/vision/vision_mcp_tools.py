@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from .VisionApi import VisionApi
 
 # Configuration
-VISION_IP = "127.0.0.1"
+VISION_IP = "192.168.3.198"
 VISION_PORT = 65432
 
 # Global state

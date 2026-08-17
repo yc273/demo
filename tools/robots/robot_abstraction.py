@@ -2294,7 +2294,7 @@ class RobotFactory:
         elif brand == RobotBrand.DUCOCOBOT:
             return DucocobotRobot("192.168.0.6", **kwargs)
         elif brand == RobotBrand.DAZU:
-            return DaZuRobot("192.168.50.10", **kwargs)
+            return DaZuRobot("192.168.3.10", **kwargs)
             pass
         elif brand == RobotBrand.KUKA:
             raise NotImplementedError("KUKA 机器人尚未实现")

@@ -164,7 +164,7 @@ class MCPClient:
         global vision_connected
         # 连接视觉服务器
         try:
-            result = await self.session.call_tool("Cam_connect_vision", {"ip_address": "127.0.0.1", "port": 65432})
+            result = await self.session.call_tool("Cam_connect_vision", {"ip_address": "192.168.3.198", "port": 65432})
             result_text = result.content[0].text if result.content else "连接失败"
             print(f"连接视觉服务器结果: {result_text}")
             vision_connected = True
@@ -583,7 +583,7 @@ class MCPClient:
             try:
                 current_pos = json.loads(current_pos_text)
                 # 修改第6个元素（索引5）
-                current_pos[5] = 0
+                # current_pos[5] = 0
             except json.JSONDecodeError:
                 print("解析关节位置数据失败")
                 return False
@@ -2206,7 +2206,7 @@ class MCPClient:
 
 
                 # current_pos[5] = 4.061032103540406
-                current_pos[5] = 0
+                # current_pos[5] = 0
                 
             except json.JSONDecodeError:
                 print("解析关节位置数据失败")
@@ -3454,7 +3454,7 @@ class MCPClient:
             try:
                 current_pos = json.loads(current_pos_text)
                 # 修改第 6 个元素（索引 5）
-                current_pos[5] = 0.17308430192027766#中
+                # current_pos[5] = 0.799#中
                 # current_pos[5] = 1.7136340727781125#上
                 #-1.456704153592027下
             except json.JSONDecodeError:
@@ -4243,7 +4243,7 @@ class MCPClient:
             elif choice == "44":
                 await self.set_payload()
             elif choice == "45":
-                await self.smooth_align_and_move2(-1.5495731230906455,0.9266476597613494,-3.120404356470582,70)
+                await self.smooth_align_and_move2(-2.4992416756858002,1.5647051277054362,2.215712938699321,100)
             elif choice == "46":
                 await self.get_screw_count()[-0.228866,-0.725795,0.937359,-2.498037398501924,0.8703258847994925,0.11023499555596183]
             elif choice == "47":

@@ -15,7 +15,7 @@ from .io_controller import IoController
 from .device_controllers import Liyou
 
 # Configuration
-IO_CONTROLLER_IP = "192.168.50.21"
+IO_CONTROLLER_IP = "192.168.3.21"
 IO_CONTROLLER_PORT = 8899
 CONNECT_TIMEOUT = 10
 
@@ -37,7 +37,7 @@ def register_io_tools(mcp: FastMCP):
     @mcp.tool()
     async def Io_connect_motor() -> bool:
         """连接到电机控制器
-        功能：连接电机控制器（默认IP：192.168.50.21:8899）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
+        功能：连接电机控制器（默认IP：192.168.1.21:8899）；触发词：连接电机、启动电机控制器、电机连接；参数：无（默认使用配置IP和端口"""
 
         # 获取现有IO控制器实例
         global io_controller
